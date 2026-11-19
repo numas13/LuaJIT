@@ -632,13 +632,18 @@ static void emit_copf2(ASMState *as, uint32_t opc, Reg ctpr,
   if (p) *p = emit_bundle_finalize(as, *p);
 }
 
+static void emit_disp(ASMState *as, Reg ctpr, MCode *target, MCode **p)
+{
+  as->bundle.cs0_target = target;
+  emit_copf2(as, E2K_DISP, ctpr, 0, p);
+}
+
 static void emit_prepcall(ASMState *as, Reg ctpr,
                           ASMFunction target, MCode **p)
 {
-  /* check 28 bit disp */
-  if (((((uintptr_t)target ^ (uintptr_t)as->mcp) >> 3) >> 28) == 0) {
-    ptrdiff_t disp = (ptrdiff_t)((void *) target - (void *)as->mcp);
-    emit_copf2(as, E2K_DISP, ctpr, disp, p);
+  ptrdiff_t delta = (MCode *) target - as->mcp;
+  if (E2KF_S_OK(delta + 64, 29)) {
+    emit_disp(as, ctpr, (MCode *) target, p);
   } else { /* Target out of range; need indirect call. */
     emit_alopf2_i(as, 0, E2K_MOVTD, (intptr_t)target, ctpr, p);
   }
