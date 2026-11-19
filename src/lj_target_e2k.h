@@ -187,6 +187,7 @@ typedef enum E2kResourceMask {
 } E2kResourceMask;
 
 typedef struct {
+  uint8_t lng;
   uint8_t f1;
   uint8_t f2;
   uint8_t f3;
