@@ -24,10 +24,12 @@ static void asm_exitstub_setup(ASMState *as)
 {
   /* Register allocation is not started yet */
   MCode *mxp = as->mctop;
-  /* Should be in separate bundle for patchexit */
-  emit_ibranch(as, (MCode *) lj_vm_exit_handler, 0, 0, &mxp);
+  emit_ct(as, RID_CTPR1, 0, 0, 0);
+  /* FIXME: qemu-e2k crashes if ct and traceno load is in one bundle with store */
   emit_snapno(as, as->T->traceno, &mxp);
   emit_alopf3_ri(as, 0, E2K_STW, RID_SP, SPOFS_TMP, RID_TMP, &mxp);
+  emit_nop(as, 4);
+  emit_disp(as, RID_CTPR1, (MCode *) lj_vm_exit_handler, &mxp);
 
   as->mctop = mxp;
 }
@@ -46,9 +48,26 @@ static void asm_guard(ASMState *as, Reg pred, int inverted)
     as->mcp = p + 4;
     inverted = inverted ? 0 : 1;
     target = p; /* Patch target later in asm_loop_fixup. */
+    emit_bundle_len(as, 8); /* required for asm_loop_fixup */
   }
-  emit_ibranch(as, target, pred, inverted, &as->mcp);
+  emit_ibranch(as, target, pred, inverted, 0);
   emit_snapno(as, as->snapno, &as->mcp);
+}
+
+/* Marker to prevent patching the GC check exit. */
+/* ord 0x0, 0x0, empty.hi */
+#define E2K_NOPATCH_GC_CHECK    0x5c0c0df
+
+/* Emit conditional branch to exit for gc check guard */
+static void asm_guard_gc(ASMState *as, Reg pred, int inverted)
+{
+  MCode *target = asm_exitstub_addr(as);
+  MCode *p = as->mcp;
+  lj_assertA(p != as->invmcp, "unexpected GC check");
+  emit_ibranch(as, target, pred, inverted, 0);
+  emit_snapno(as, as->snapno, 0);
+  /* Keep in sync with E2K_NOPATCH_GC_CHECK */
+  emit_alopf1(as, &as->mcp, 0, E2K_ORD, 0xc0, 0xc0, 0xdf);
 }
 
 /* -- Operand fusion ------------------------------------------------------ */
@@ -1412,11 +1431,6 @@ static void asm_stack_restore(ASMState *as, SnapShot *snap)
 
 /* -- GC handling --------------------------------------------------------- */
 
-/* Marker to prevent patching the GC check exit. */
-/* ord 0x0, 0x0, empty.hi */
-#define E2K_NOPATCH_GC_CHECK_HS 0x4000001
-#define E2K_NOPATCH_GC_CHECK    0x5c0c0df
-
 /* Check GC threshold and do one or more GC steps. */
 static void asm_gc_check(ASMState *as)
 {
@@ -1428,9 +1442,7 @@ static void asm_gc_check(ASMState *as)
   l_end = emit_label(as);
   /* Exit trace if in GCSatomic or GCSfinalize. Avoids syncing GC objects. */
   /* Assumes asm_snap_prep() already done. */
-  asm_guard(as, RID_PRED0, 1);
-  *--as->mcp = E2K_NOPATCH_GC_CHECK;
-  *--as->mcp = E2K_NOPATCH_GC_CHECK_HS;
+  asm_guard_gc(as, RID_PRED0, 1);
   emit_alopf7_ri(as, 0, E2K_CMPEDB, RID_RET, 0, RID_PRED0, &as->mcp);
   args[0] = ASMREF_TMP1;  /* global_State *g */
   args[1] = ASMREF_TMP2;  /* MSize steps     */
@@ -1450,18 +1462,47 @@ static void asm_gc_check(ASMState *as)
 
 /* -- Loop handling ------------------------------------------------------- */
 
+/* Look for CS0. */
+static MCode *e2k_lookup_cs0(MCode *p) {
+  E2kHS hs = { p[0] };
+  if ((hs.fields.c & 1)) {
+    p += (hs.fields.x_s_sw & 2) ? 2 : 1;
+    return p + __builtin_popcount(hs.fields.als);
+  }
+  return NULL;
+}
+
+/* Look for ibranch. */
+static MCode *e2k_lookup_ibranch(MCode *p) {
+  E2kHS hs = { p[0] };
+  if (hs.fields.x_s_sw & 2) {
+    /* TODO: check ct in SS syllable */
+    MCode *cs0 = e2k_lookup_cs0(p);
+    if (cs0 && (*cs0 >> 28) == E2K_IBRANCH) {
+      return cs0;
+    }
+  }
+  return NULL;
+}
+
+#define E2K_NOP_LOOP_PATCH 0x4e853fc9
+
 static void asm_loop_fixup(ASMState *as)
 {
   MCode *p = as->mctop;
   MCode *target = as->mcp;
-  p[-1] = E2K_NOP; p[-2] = E2K_NOP; p[-3] = E2K_NOP; p[-4] = E2K_NOP;
+  p[-4] = E2K_NOP(4, 0);
+  p[-3] = E2K_NOP_LOOP_PATCH;
+  p[-2] = 0;
+  p[-1] = 0;
   p = p - 4; /* skip nops */
   /* p[-4] - HS; p[-3] - SS; p[-2] - CS0; p[-1] - Align */
   if (as->loopinv) { /* Inverted loop branch? */
+    MCode *cs0 = e2k_lookup_ibranch(p - 8);
+    lj_assertA(cs0, "expect ibranch");
     /* asm_guard already inverted the cond branch. Only patch the target. */
-    uint32_t tmp = p[-2] & 0xf0000000;
-    uint32_t disp = (ptrdiff_t)((void *)target - (void *)p + 4*4) >> 3;
-    p[-2] = tmp | (disp & 0xfffffff);
+    *cs0 &= 0xf0000000;
+    *cs0 |= E2KF_DISP(target - p + 8);
   } else { /* 4(HS+SS+CS0+Align) */
     emit_ibranch(as, target, 0, 0, &p);
   }
@@ -1528,7 +1569,10 @@ static void asm_tail_fixup(ASMState *as, TraceNo lnk)
     emit_alopf12_i(as, 0, E2K_GETSP, spadj, RID_SP, &p);
     /* 4(HS+ALS+ALES+LTS) */
   } else {
-    p[-1] = E2K_NOP; p[-2] = E2K_NOP; p[-3] = E2K_NOP; p[-4] = E2K_NOP;
+    p[-4] = E2K_NOP(4, 0);
+    p[-3] = 0;
+    p[-2] = 0;
+    p[-1] = 0;
   }
 }
 
@@ -1567,6 +1611,105 @@ static void asm_setup_target(ASMState *as)
 
 /* -- Trace patching ------------------------------------------------------ */
 
+#define E2K_OPC_ADDD 0x11
+#define E2K_REG_EXITNO 0xf0 /* g16 */
+#define E2K_IS_SRC1_IMM5(x)   ((x) >= 0xc0 && (x) < 0xe0)
+#define E2K_IS_SRC2_IMM4(x)   ((x) >= 0xc0 && (x) < 0xd0)
+#define E2K_IS_SRC2_LIT16(x)  ((x) >= 0xd0 && (x) < 0xd8)
+#define E2K_IS_SRC2_LIT32(x)  ((x) >= 0xd8 && (x) < 0xdc)
+#define E2K_IS_SRC2_LIT64(x)  ((x) >= 0xdc && (x) < 0xdf)
+#define E2K_IS_SRC2_LIT(x)    ((x) >= 0xd0 && (x) < 0xdf)
+
+#define E2K_ALS_NOP 0x11c0c0df
+
+/* Extract immediate or literal value for src2. */
+static uint64_t e2k_extract_lit(jit_State *J, MCode *p, uint8_t src2) {
+  E2kHS hs;
+  int index;
+  uint32_t *lts;
+
+  if (E2K_IS_SRC2_IMM4(src2)) {
+    return src2 & 15;
+  }
+
+  /* Get pointer to the lts0. */
+  hs.i = p[0];
+  index = (hs.fields.lng + 1) * 2 - hs.fields.cds - hs.fields.pls;
+  lts = (uint32_t *) (p + index - 1);
+
+  if (E2K_IS_SRC2_LIT16(src2)) {
+    index = src2 & 1;
+    return (int16_t) (lts[-index] >> ((src2 & 4) ? 16 : 0));
+  } else if (E2K_IS_SRC2_LIT32(src2)) {
+    index = src2 & 3;
+    return (int32_t) lts[-index];
+  } else if (E2K_IS_SRC2_LIT64(src2)) {
+    index = src2 & 3;
+    return ((uint64_t) lts[-index - 1] << 32) | lts[-index];
+  }
+
+#ifdef LUA_USE_ASSERT
+  lj_assertJ(0, "expect literal src2(%#x)", src2);
+  return 0;
+#else
+  abort();
+#endif
+}
+
+/* Look for load of exit number. */
+static MCode *e2k_lookup_exitno_load(jit_State *J, MCode *p, ExitNo *exitno) {
+  E2kHS hs = { p[0] };
+  E2kAlopf1 *als;
+
+  if (hs.fields.als == 0)
+    return NULL;
+
+  als = (E2kAlopf1 *) (p + (hs.fields.x_s_sw & 2 ? 2 : 1));
+  for (int i = 0; i < 6; i++) {
+    if ((hs.fields.als & (1 << i)) == 0)
+      continue;
+
+    /* Look for addd imm, imm|lit, TMP0 */
+    if ((hs.fields.ales & (1 << i)) == 0
+        && als->fields.cop == E2K_OPC_ADDD
+        && als->fields.dst == E2K_REG_EXITNO
+        && E2K_IS_SRC1_IMM5(als->fields.src1)
+        && (E2K_IS_SRC2_IMM4(als->fields.src2)
+            || E2K_IS_SRC2_LIT(als->fields.src2))) {
+      *exitno = (als->fields.src1 & 31) + e2k_extract_lit(J, p, als->fields.src2);
+      return (MCode *) als;
+    }
+
+    als += 1;
+  }
+
+  return NULL;
+}
+
+/* Look for nopatch gc check. */
+static MCode *e2k_lookup_nopatch_gc_check(jit_State *J, MCode *p) {
+  E2kHS hs = { p[0] };
+  MCode *als;
+
+  if (hs.fields.als == 0)
+    return NULL;
+
+  als = p + (hs.fields.x_s_sw & 2 ? 2 : 1);
+  for (int i = 0; i < 6; i++) {
+    if ((hs.fields.als & (1 << i)) == 0)
+      continue;
+
+    if ((hs.fields.ales & (1 << i)) == 0
+        && *als == E2K_NOPATCH_GC_CHECK) {
+      return als;
+    }
+
+    als += 1;
+  }
+
+  return NULL;
+}
+
 /* Patch exit jumps of existing machine code to a new target. */
 void lj_asm_patchexit(jit_State *J, GCtrace *T, ExitNo exitno, MCode *target)
 {
@@ -1575,40 +1718,60 @@ void lj_asm_patchexit(jit_State *J, GCtrace *T, ExitNo exitno, MCode *target)
   MCode *px = exitstub_trace_addr(T, exitno);
   MCode *cstart = NULL, *cstop = NULL;
   MCode *mcarea = lj_mcode_patch(J, p, 0);
-  /* Look for addd  0, exitno(lts32), TMP0, (predN) */
-  MCode exitload = 0x11c0d8f0;
-  for (p++; p < pe; p++) {
-    if (*p == exitload) { /* Look for load of exit number. */
-      if (p[2] != exitno) continue;
-      /* p[-3] - E2K_NOPATCH_GC_CHECK_HS; p[-2] - E2K_NOPATCH_GC_CHECK. */
-      /* p[-1] - HS; p[0] - ALS; p[1] - hole; p[2] - LTS. */
-      /* p[3] - HS; p[4] - SS; p[5] - CS0; p[6] - Align. */
-      /* Look for exitstub branch. */
-      uint32_t disp = (ptrdiff_t)((void *)px - (void *)p - 3*4) >> 3;
-      if ((p[5] ^ (disp & 0xfffffff)) == 0 && p[-2] != E2K_NOPATCH_GC_CHECK) {
-        disp = (ptrdiff_t)((void *)target - (void *)p - 3*4) >> 3;
-        p[5] = disp & 0xfffffff;
-        /* Replace the load of the exit number with nops. */
-        p[-1] = E2K_NOP; p[0] = E2K_NOP; p[1] = E2K_NOP; p[2] = E2K_NOP;
-        cstop = p + 7;
-        if (!cstart) cstart = p - 1;
-      } else if (p+7 == pe) {
-        /* Patch NOP after code for inverted loop branch. Use of J is ok. */
-        lj_assertJ(p[7] == E2K_NOP, "expected NOP");
-        /* Replace the load of the exit number with nops. */
-        p[-1] = E2K_NOP; p[0] = E2K_NOP; p[1] = E2K_NOP; p[2] = E2K_NOP;
-        disp = (ptrdiff_t)((void *)target - (void *)p - 7*4) >> 3;
-        /* ibranch target */
-        p[7] = 0x5012; /* HS */
-        p[8] = 0xc0000020; /* SS */
-        p[9] = disp & 0xfffffff; /* CS0 */
-        p[10] = 0; /* Align */
-        cstop = p + 11;
-        if (!cstart) cstart = p - 1;
+  MCode *als = NULL;
+  ExitNo als_exitno = 0;
+  int gc_check = 0;
+  while (p < pe) {
+    E2kHS hs = { p[0] };
+    MCode *t;
+    int lng = (hs.fields.lng + 1) * 2;
+
+    if (e2k_lookup_nopatch_gc_check(J, p)) {
+      /* GC checks must not be patched. */
+      als = NULL;
+      gc_check = 1;
+    }
+
+    t = e2k_lookup_exitno_load(J, p, &als_exitno);
+    if (t) {
+      als = t;
+      if (gc_check || als_exitno != exitno) {
+        /* Do not patch next exitstub branch. */
+        als = NULL;
+        gc_check = 0;
       }
     }
+
+    if (als) {
+      int patched = 0;
+      /* Look for exitstub branch. */
+      MCode *cs0 = e2k_lookup_ibranch(p);
+      if (cs0 && *cs0 == E2KF_DISP(px - p)) {
+        patched = 1;
+        *cs0 = E2KF_DISP(target - p);
+        cstop = p + lng;
+        if (!cstart) cstart = p;
+      } else if (p + lng == pe && p[lng] == E2K_NOP(4, 0)) {
+        /* Patch NOP after code for inverted loop branch. Use of J is ok. */
+        lj_assertJ(p[lng + 1] == E2K_NOP_LOOP_PATCH, "expected NOP");
+        patched = 1;
+        /* ibranch target */
+        p[lng + 0] = 0x00005012; /* HS */
+        p[lng + 1] = 0xc0000020; /* SS */
+        p[lng + 2] = E2KF_DISP(target - p - lng); /* CS0 */
+        p[lng + 3] = 0; /* PAD */
+        cstop = p + lng + 4;
+        if (!cstart) cstart = p;
+      }
+      if (patched) {
+        *als = E2K_ALS_NOP;
+        als = NULL;
+      }
+    }
+
+    /* Skip this bundle. */
+    p += lng;
   }
   if (cstart) lj_mcode_sync(cstart, cstop);
   lj_mcode_patch(J, mcarea, 1);
 }
-

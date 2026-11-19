@@ -33,7 +33,7 @@ enum {
   GPRDEF(RIDENUM)  /* Directly addressable, rotating and global registers */
   RID_MAX,
   NGPRDEF(RIDENUM) /* Predicates and control flow registers */
-  RID_TMP  = RID_G16,
+  RID_TMP  = RID_G16, /* Keep in sync with E2K_REG_EXITNO */
   RID_TMP1 = RID_G16,
   RID_TMP2 = RID_G17,
   RID_TMP3 = RID_G18,
@@ -113,10 +113,14 @@ typedef struct {
 /* Highest exit + 1 indicates stack check. */
 #define EXITSTATE_CHECKEXIT 1
 
+#define E2K_BUNDLE_LEN(hs) (((hs) >> 4) * 2 + 2)
+#define E2K_IS_NOP(hs) (((hs) & 0xfffffc0f) == 0)
+
 /* Return the address of a per-trace exit stub. */
 static LJ_AINLINE uint32_t *exitstub_trace_addr_(uint32_t *p, uint32_t exitno)
 {
-  while (*p == 0) p++; /* Skip NOP */
+  while (E2K_IS_NOP(*p))
+    p += E2K_BUNDLE_LEN(*p);
   return p;
 }
 
@@ -383,7 +387,8 @@ typedef enum {
 
 #define E2K_DISP    0x0
 #define E2K_IBRANCH 0x0
-#define E2K_NOP     0x0
+#define E2K_NOP(len, nops) \
+  (((uint32_t) (nops) << 7) | (((uint32_t) (len) / 2 - 1) << 4))
 
 #define E2K_SETR0   0x0
 #define E2K_SETR1   0x1
