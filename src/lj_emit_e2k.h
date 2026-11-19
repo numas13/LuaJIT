@@ -530,9 +530,8 @@ static void emit_cds(ASMState *as, int opc, int als, Reg pred, int inverted, MCo
 #define emit_alopf1_ii(as, spec, op, src1, src2, dst, p) \
   emit_alopf1(as, p, spec, op, ISRC1(src1), ISRC2(src2), RDST(dst))
 #define emit_snapno(as, snapno, p) \
-  emit_alopf1(as, p, 0, E2K_ADDD, emit_src1(as, E2K_CONST, 0), \
-               emit_lts(as, RES_LTS_ALL, E2K_CONST32, (intptr_t)snapno) | 0xd8, \
-               emit_dst(as, E2K_REG, RID_TMP))
+  emit_alopf1_ii(as, 0, E2K_ADDD, (snapno) < 32 ? (snapno) : 31, \
+      (snapno) < 32 ? 0 : (snapno) - 31, RID_TMP, p);
 #define emit_nop(as, nops) \
   as->bundle.nop = nops
 #define emit_bundle_len(as, len) \
