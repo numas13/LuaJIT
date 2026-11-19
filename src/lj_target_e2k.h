@@ -200,9 +200,16 @@ typedef struct {
   uint16_t ales[6];
   uint32_t lts[4];
   uint16_t cds[6];
+  void *cs0_target;
 } E2kBundle;
 
 /* -- Instructions -------------------------------------------------------- */
+
+/* Instruction fields. */
+#define E2KF_DISP(x) (((uint32_t) (x) / 2) & 0x0fffffffu)
+
+/* Check for valid field range. */
+#define E2KF_S_OK(x, b) ((((x) + (1 << (b-1))) >> (b)) == 0)
 
 typedef union {
   uint32_t i;

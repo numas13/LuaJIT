@@ -25,8 +25,7 @@ static void asm_exitstub_setup(ASMState *as)
   /* Register allocation is not started yet */
   MCode *mxp = as->mctop;
   /* Should be in separate bundle for patchexit */
-  emit_ibranch(as, (ptrdiff_t)((void *)lj_vm_exit_handler - (void *)mxp),
-               0, 0, &mxp);
+  emit_ibranch(as, (MCode *) lj_vm_exit_handler, 0, 0, &mxp);
   emit_snapno(as, as->T->traceno, &mxp);
   emit_alopf3_ri(as, 0, E2K_STW, RID_SP, SPOFS_TMP, RID_TMP, &mxp);
 
@@ -48,8 +47,7 @@ static void asm_guard(ASMState *as, Reg pred, int inverted)
     inverted = inverted ? 0 : 1;
     target = p; /* Patch target later in asm_loop_fixup. */
   }
-  emit_ibranch(as, (ptrdiff_t)((void *)target - (void *)p),
-               pred, inverted, &as->mcp);
+  emit_ibranch(as, target, pred, inverted, &as->mcp);
   emit_snapno(as, as->snapno, &as->mcp);
 }
 
@@ -521,8 +519,7 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
   l_exit = asm_exitstub_addr(as);
   if (merge == IR_NE) {
     /* unconditional asm_guard */
-    emit_ibranch(as, (ptrdiff_t)((void *)l_exit - (void *)as->mcp),
-                 0, 0, &as->mcp);
+    emit_ibranch(as, l_exit, 0, 0, &as->mcp);
     emit_snapno(as, as->snapno, &as->mcp);
   } else if (destused) {
     emit_loada(as, dest, niltvg(J2G(as->J)));
@@ -535,15 +532,13 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
 
   /* Type  and value comparison. */
   if (merge == IR_EQ) l_end = l_exit;
-  emit_ibranch(as, (ptrdiff_t)((void *)l_end - (void *)as->mcp),
-               RID_PRED2, 0, &as->mcp);
+  emit_ibranch(as, l_end, RID_PRED2, 0, &as->mcp);
   if (merge == IR_EQ) {
     emit_snapno(as, as->snapno, &as->mcp);
   }
 
   if (irt_isnum(kt)) {
-    emit_ibranch(as, (ptrdiff_t)((void *)l_next - (void *)as->mcp),
-                 RID_PRED1, 1, &as->mcp);
+    emit_ibranch(as, l_next, RID_PRED1, 1, &as->mcp);
     emit_alopf7_ri(as, 0, E2K_CMPBSB, tmp2, (int32_t)LJ_TISNUM, RID_PRED1, 0);
     emit_alopf7_ri(as, 1, E2K_CMPEDB, tmp3, 0, RID_PRED3, &as->mcp);
     emit_alopf7_rr(as, 0, E2K_FCMPEQDB, tmp1, key, RID_PRED2, 0);
@@ -1020,8 +1015,7 @@ static void asm_tbar(ASMState *as, IRIns *ir)
   emit_getgl(as, link, gc.grayagain);
   /* Clear black bit. */
   emit_alopf1_rr(as, 0, E2K_XORD, tmp, mark, mark, &as->mcp);
-  emit_ibranch(as, (ptrdiff_t)((void *)l_end - (void *)as->mcp),
-               RID_PRED0, 0, &as->mcp);
+  emit_ibranch(as, l_end, RID_PRED0, 0, &as->mcp);
   emit_alopf7_ri(as, 0, E2K_CMPEDB, tmp, 0, RID_PRED0, &as->mcp);
   emit_alopf1_ri(as, 0, E2K_ANDD, mark, LJ_GC_BLACK, tmp, &as->mcp);
   emit_alopf1_ri(as, 0, E2K_LDB, tab, (intptr_t)offsetof(GCtab, marked),
@@ -1449,8 +1443,7 @@ static void asm_gc_check(ASMState *as)
   tmp2 = ra_releasetmp(as, ASMREF_TMP2);
   emit_loadi(as, tmp2, as->gcsteps);
   /* Jump around GC step if GC total < GC threshold. */
-  emit_ibranch(as, (ptrdiff_t)((void *)l_end - (void *)as->mcp),
-               RID_PRED0, 0, &as->mcp);
+  emit_ibranch(as, l_end, RID_PRED0, 0, &as->mcp);
   emit_alopf7_rr(as, 0, E2K_CMPBDB, tmp1, tmp2, RID_PRED0, &as->mcp);
   emit_getgl(as, tmp1, gc.total);
   emit_getgl(as, tmp2, gc.threshold);
@@ -1473,7 +1466,7 @@ static void asm_loop_fixup(ASMState *as)
     uint32_t disp = (ptrdiff_t)((void *)target - (void *)p + 4*4) >> 3;
     p[-2] = tmp | (disp & 0xfffffff);
   } else { /* 4(HS+SS+CS0+Align) */
-    emit_ibranch(as, (ptrdiff_t)((void *)target - (void *)p), 0, 0, &p);
+    emit_ibranch(as, target, 0, 0, &p);
   }
 }
 
@@ -1532,7 +1525,7 @@ static void asm_tail_fixup(ASMState *as, TraceNo lnk)
   MCode *target = lnk ? traceref(as->J, lnk)->mcode : (MCode *)lj_vm_exit_interp;
   MCode *p = as->mctop;
   int32_t spadj = as->T->spadjust;
-  emit_ibranch(as, (ptrdiff_t)((void *)target - (void *)p), 0, 0, &p);
+  emit_ibranch(as, target, 0, 0, &p);
   /* 4(HS+SS+CS0+Align) */
   if (spadj) {
     emit_alopf12_i(as, 0, E2K_GETSP, spadj, RID_SP, &p);

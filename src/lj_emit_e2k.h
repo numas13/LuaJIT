@@ -98,6 +98,14 @@ static MCode *emit_bundle_finalize(ASMState *as, MCode *mxp)
   uint8_t lng = f1 + f2 + f3 + f4;
   uint8_t hs_lng = (lng + 1) & -2;
 
+  if ((hs_c & 0x01) && as->bundle.cs0_target) {
+    ptrdiff_t delta = (MCode *) as->bundle.cs0_target - mxp + hs_lng;
+    lj_assertA(delta % 2 == 0, "branch target not aligned");
+    lj_assertA(E2KF_S_OK(delta, 29), "branch target out of range");
+    as->bundle.cs[0] &= 0xf0000000;
+    as->bundle.cs[0] |= E2KF_DISP(delta);
+  }
+
   E2kHS hs;
   hs.i = 0;
   hs.fields.mdl = (uint32_t)(f1 + f2 - 1);
@@ -143,7 +151,10 @@ static MCode *emit_bundle_finalize(ASMState *as, MCode *mxp)
   if (hs_c & 0x02) *--mxp = as->bundle.cs[1];
   if (hs_c & 0x01) {
     E2kC0f2 cs0 = { as->bundle.cs[0] };
-    cs0.fields.disp = cs0.fields.disp + (hs_lng >> 1);
+    if (as->bundle.cs0_target == NULL) {
+      /* Adjust disp if target is set manually. */
+      cs0.fields.disp = cs0.fields.disp + (hs_lng >> 1);
+    }
     *--mxp = cs0.i;
   }
   /* ALS[0-5], 32-bit */
@@ -633,17 +644,17 @@ static void emit_prepcall(ASMState *as, Reg ctpr,
   }
 }
 
-static void emit_ibranch(ASMState *as, uintptr_t disp, Reg pred,
+static void emit_ibranch(ASMState *as, MCode *target, Reg pred,
                          int inverted, MCode **p)
 {
+  as->bundle.cs0_target = target;
   emit_ct(as, 0, pred, inverted, 0);
-  emit_copf2(as, E2K_IBRANCH, 0, disp, p);
+  emit_copf2(as, E2K_IBRANCH, 0, 0, p);
 }
 
-static void emit_jmp(ASMState *as,  MCode *target)
+static void emit_jmp(ASMState *as, MCode *target)
 {
-  emit_ibranch(as, (ptrdiff_t)((void *)target - (void *)as->mcp),
-               0, 0, &as->mcp);
+  emit_ibranch(as, target, 0, 0, &as->mcp);
 }
 
 static void emit_setr(ASMState *as, MCode **p,
