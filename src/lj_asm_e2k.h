@@ -509,7 +509,7 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
   int isk = irref_isk(ir->op2);
   IRType1 kt = irkey->t;
   uint32_t khash;
-  MCLabel l_end, l_next, l_exit;
+  MCLabel l_end, l_next, l_exit, l_loop;
   if (!isk || irt_isnum(kt)) {
     key = ra_alloc1(as, refkey, rset_clear(allow, tmp3));
   }
@@ -559,8 +559,9 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
     emit_alopf7_ri(as, 1, E2K_CMPEDB, tmp3, 0, RID_PRED3, &as->mcp);
   }
   emit_alopf1_ri(as, 0, E2K_LDD, dest, (intptr_t)offsetof(Node, key.u64), tmp1, 0);
-  emit_alopf1_ri(as, 1, E2K_LDD, dest, (intptr_t)offsetof(Node, next), tmp3, 0);
-  emit_copf2(as, E2K_DISP, RID_CTPR1, -24 /* HS+CS0+ALS+ALS+LTS+ALIGN */, &as->mcp);
+  emit_alopf1_ri(as, 1, E2K_LDD, dest, (intptr_t)offsetof(Node, next), tmp3, &as->mcp);
+  l_loop = emit_label(as);
+
   if (!isk && irt_isaddr(kt)) {
     emit_alopf1_ri(as, 0, E2K_ADDD, key, (intptr_t)irt_toitype(kt) << 47,
                    tmp2, 0);
@@ -589,10 +590,9 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
                    tmp2, 0);
     if (isk) {
       /* Nothing to do */
-      as->mcp = emit_bundle_finalize(as, as->mcp);
     } else if (irt_isstr(kt)) {
       emit_alopf1_ri(as, 0, E2K_LDW, key, (intptr_t)offsetof(GCstr, sid),
-                     tmp1, &as->mcp);
+                     tmp1, 0);
     } else { /*  Must match with hash*() in lj_tab.c. */
       emit_alopf1_rr(as, 0, E2K_SUBS, tmp1, tmp2, tmp1, &as->mcp);
       emit_alopf1_ri(as, 0, E2K_SCLS, tmp2, HASH_ROT3, tmp2, 0);
@@ -604,14 +604,15 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
       if (irt_isnum(kt)) {
         emit_alopf1_rr(as, 0, E2K_ADDS, tmp1, tmp1, tmp1, &as->mcp);
         emit_alopf1_ri(as, 0, E2K_SHRD, key, 32, tmp1, 0);
-        emit_alopf1_ri(as, 0, E2K_ADDS, key, 0, tmp2, &as->mcp);
+        emit_alopf1_ri(as, 0, E2K_ADDS, key, 0, tmp2, 0);
       } else {
         emit_alopf1_ri(as, 0, E2K_SHRD, tmp1, 32, tmp1, &as->mcp);
         emit_alopf1_ri(as, 0, E2K_ADDS, key, 0, tmp2, 0);
         emit_alopf1_ri(as, 0, E2K_ADDD, key, (intptr_t)irt_toitype(kt) << 47,
-                       tmp1, &as->mcp);
+                       tmp1, 0);
       }
     }
+    emit_disp(as, RID_CTPR1, l_loop, &as->mcp);
   }
 }
 
@@ -1051,8 +1052,7 @@ static void asm_obar(ASMState *as, IRIns *ir)
                                       (intptr_t)offsetof(GCupval, tv), tmp1, 0);
   emit_alopf1_ri(as, 0, E2K_LDB, val, (intptr_t)offsetof(GChead, marked),
                  tmp2, 0);
-  ptrdiff_t disp = (ptrdiff_t)((void *) l_end - (void *)as->mcp);
-  emit_copf2(as, E2K_DISP, RID_CTPR1, disp, &as->mcp);
+  emit_disp(as, RID_CTPR1, l_end, &as->mcp);
 }
 
 /* -- FP/int arithmetic and logic operations ------------------------------ */
