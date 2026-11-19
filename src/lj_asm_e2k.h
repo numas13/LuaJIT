@@ -509,18 +509,15 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
   int isk = irref_isk(ir->op2);
   IRType1 kt = irkey->t;
   uint32_t khash;
-  MCLabel l_end, l_next, l_exit, l_loop;
+  MCLabel l_end, l_next, l_loop;
   if (!isk || irt_isnum(kt)) {
     key = ra_alloc1(as, refkey, rset_clear(allow, tmp3));
   }
 
   /* Key not found in chain: jump to exit (if merged or load niltv. */
   l_end = emit_label(as);
-  l_exit = asm_exitstub_addr(as);
   if (merge == IR_NE) {
-    /* unconditional asm_guard */
-    emit_ibranch(as, l_exit, 0, 0, &as->mcp);
-    emit_snapno(as, as->snapno, &as->mcp);
+    asm_guard(as, 0, 0);
   } else if (destused) {
     emit_loada(as, dest, niltvg(J2G(as->J)));
   }
@@ -531,10 +528,10 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
   l_next = emit_label(as);
 
   /* Type  and value comparison. */
-  if (merge == IR_EQ) l_end = l_exit;
-  emit_ibranch(as, l_end, RID_PRED2, 0, &as->mcp);
   if (merge == IR_EQ) {
-    emit_snapno(as, as->snapno, &as->mcp);
+    asm_guard(as, RID_PRED2, 0);
+  } else {
+    emit_ibranch(as, l_end, RID_PRED2, 0, &as->mcp);
   }
 
   if (irt_isnum(kt)) {
