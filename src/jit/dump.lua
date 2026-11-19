@@ -84,7 +84,7 @@ local nexitsym = 0
 local function fillsymtab_tr(tr, nexit)
   local t = {}
   symtabmt.__index = t
-  if jit.arch:sub(1, 4) == "mips" then
+  if jit.arch:sub(1, 4) == "mips" or jit.arch:sub(1, 3) == "e2k" then
     t[traceexitstub(tr, 0)] = "exit"
     return
   end
