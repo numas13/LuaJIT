@@ -98,6 +98,12 @@ static MCode *emit_bundle_finalize(ASMState *as, MCode *mxp)
   uint8_t lng = f1 + f2 + f3 + f4;
   uint8_t hs_lng = (lng + 1) & -2;
 
+  if (as->bundle.lng) {
+    lj_assertA(hs_lng <= as->bundle.lng, "bundle overflow");
+    hs_lng = as->bundle.lng;
+  }
+  lj_assertA(hs_lng % 2 == 0 && hs_lng <= 16, "invalid bundle size");
+
   if ((hs_c & 0x01) && as->bundle.cs0_target) {
     ptrdiff_t delta = (MCode *) as->bundle.cs0_target - mxp + hs_lng;
     lj_assertA(delta % 2 == 0, "branch target not aligned");
@@ -129,7 +135,10 @@ static MCode *emit_bundle_finalize(ASMState *as, MCode *mxp)
     }
   }
 
-  if (hs_lng != lng) *--mxp = 0; /* Align */
+  /* Write padding syllables to match required bundle size. */
+  for (int i = lng; i < hs_lng; i++)
+    *--mxp = 0;
+
   /* ALES[0-1,3-4], 16-bit */
   uint32_t tmp_syl = 0;
   int hi = half_pad ? 1 : 0;
@@ -526,6 +535,8 @@ static void emit_cds(ASMState *as, int opc, int als, Reg pred, int inverted, MCo
                emit_dst(as, E2K_REG, RID_TMP))
 #define emit_nop(as, nops) \
   as->bundle.nop = nops
+#define emit_bundle_len(as, len) \
+  (as)->bundle.lng = (len)
 
 /* -- Emit loads/stores --------------------------------------------------- */
 
