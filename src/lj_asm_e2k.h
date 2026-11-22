@@ -24,11 +24,11 @@ static void asm_exitstub_setup(ASMState *as)
 {
   /* Register allocation is not started yet */
   MCode *mxp = as->mctop;
-  emit_ct(as, RID_CTPR1, 0, 0, 0);
-  emit_snapno(as, as->T->traceno, 0);
-  emit_alopf3_ri(as, 0, E2K_STW, RID_SP, SPOFS_TMP, RID_TMP, &mxp);
-  emit_nop(as, 4);
-  emit_disp(as, RID_CTPR1, (MCode *) lj_vm_exit_handler, &mxp);
+  bundle_ct(as, RID_CTPR1, 0, 0, 0);
+  bundle_snapno(as, as->T->traceno, 0);
+  bundle_alopf3_ri(as, 0, E2K_STW, RID_SP, SPOFS_TMP, RID_TMP, &mxp);
+  bundle_nop(as, 4);
+  bundle_disp(as, RID_CTPR1, (MCode *) lj_vm_exit_handler, &mxp);
 
   as->mctop = mxp;
 }
@@ -47,10 +47,13 @@ static void asm_guard(ASMState *as, Reg pred, int inverted)
     as->mcp = p + 4;
     inverted = inverted ? 0 : 1;
     target = p; /* Patch target later in asm_loop_fixup. */
-    emit_bundle_len(as, 8); /* required for asm_loop_fixup */
+    bundle_len(as, 8); /* required for asm_loop_fixup */
+    bundle_ibranch(as, target, pred, inverted, 0);
+    bundle_snapno(as, as->snapno, &as->mcp);
+  } else {
+    emit_ibranch(as, target, pred, inverted);
+    emit_snapno(as, as->snapno);
   }
-  emit_ibranch(as, target, pred, inverted, 0);
-  emit_snapno(as, as->snapno, &as->mcp);
 }
 
 /* Marker to prevent patching the GC check exit. */
@@ -63,10 +66,12 @@ static void asm_guard_gc(ASMState *as, Reg pred, int inverted)
   MCode *target = asm_exitstub_addr(as);
   MCode *p = as->mcp;
   lj_assertA(p != as->invmcp, "unexpected GC check");
-  emit_ibranch(as, target, pred, inverted, 0);
-  emit_snapno(as, as->snapno, 0);
+  emit_ibranch(as, target, pred, inverted);
+  emit_snapno(as, as->snapno);
+  /* TODO: e2k: emit gc check marker */
+  emit_serialize(as);
   /* Keep in sync with E2K_NOPATCH_GC_CHECK */
-  emit_alopf1(as, &as->mcp, 0, E2K_ORD, 0xc0, 0xc0, 0xdf);
+  bundle_alopf1(as, &as->mcp, 0, E2K_ORD, 0xc0, 0xc0, 0xdf);
 }
 
 /* -- Operand fusion ------------------------------------------------------ */
@@ -163,7 +168,7 @@ static void asm_gencall(ASMState *as, const CCallInfo *ci, IRRef *args)
   int32_t ofs = is_vararg ? 0 : STACKARG_OFS;
   Reg gpr = RID_NONE;
   if (ci->func)
-    emit_call(as, RID_CTPR1, 0, 0, JIT_WBS, &as->mcp);
+    emit_call(as, RID_CTPR1, 0, 0, JIT_WBS);
   for (gpr = REGARG_FIRSTGPR; gpr <= REGARG_LASTGPR; gpr++)
     as->cost[gpr] = REGCOST(~0u, ASMREF_L);
   gpr = REGARG_FIRSTGPR;
@@ -197,7 +202,7 @@ static void asm_gencall(ASMState *as, const CCallInfo *ci, IRRef *args)
     checkmclim(as);
   }
   if (ci->func) {
-    emit_prepcall(as, RID_CTPR1, ci->func, &as->mcp);
+    emit_prepcall(as, RID_CTPR1, ci->func);
   }
 }
 
@@ -236,13 +241,13 @@ static void asm_callx(ASMState *as, IRIns *ir)
   if (irref_isk(func)) {  /* Call to constant address. */
     ci.func = (ASMFunction)(void *)get_kval(as, func);
   } else {
-    emit_call(as, RID_CTPR1, 0, 0, JIT_WBS, &as->mcp);
+    emit_call(as, RID_CTPR1, 0, 0, JIT_WBS);
     ci.func = (ASMFunction)(void *)0;
   }
   asm_gencall(as, &ci, args);
   if (!ci.func) {
     Reg r = ra_alloc1(as, func, RSET_GPR & ~RSET_SCRATCH);
-    emit_alopf2_r(as, 0, E2K_MOVTD, r, RID_CTPR1, &as->mcp);
+    emit_alopf2_r(as, 0, E2K_MOVTD, r, RID_CTPR1);
   }
 }
 
@@ -261,8 +266,8 @@ static void asm_retf(ASMState *as, IRIns *ir)
   emit_addptr(as, base, -8*delta);
   Reg tmp = ra_scratch(as, rset_exclude(RSET_GPR, base));
   asm_guard(as, RID_PRED0, 1);
-  emit_alopf7_ri(as, 0, E2K_CMPEDB, tmp, (intptr_t)pc, RID_PRED0, &as->mcp);
-  emit_alopf1_ri(as, 0, E2K_LDD, base, LJ_FR2 ? -8 : -4, tmp, &as->mcp);
+  emit_alopf7_ri(as, 0, E2K_CMPEDB, tmp, (intptr_t)pc, RID_PRED0);
+  emit_alopf1_ri(as, 0, E2K_LDD, base, LJ_FR2 ? -8 : -4, tmp);
 }
 
 /* -- Buffer operations --------------------------------------------------- */
@@ -276,8 +281,8 @@ static void asm_bufhdr_write(ASMState *as, Reg sb)
   IRIns irgc;
   irgc.ot = IRT(0, IRT_PGC);  /* GC type. */
   emit_storeofs(as, &irgc, tmp2, sb, offsetof(SBuf, L));
-  emit_alopf1_rr(as, 0, E2K_ORD, tmp2, tmp1, tmp2, &as->mcp);
-  emit_alopf1_ri(as, 0, E2K_ANDD, tmp1, SBUF_MASK_FLAG, tmp1, &as->mcp);
+  emit_alopf1_rr(as, 0, E2K_ORD, tmp2, tmp1, tmp2);
+  emit_alopf1_ri(as, 0, E2K_ANDD, tmp1, SBUF_MASK_FLAG, tmp1);
   emit_getgl(as, tmp2, cur_L);
   emit_loadofs(as, &irgc, tmp1, sb, offsetof(SBuf, L));
 }
@@ -290,9 +295,9 @@ static void asm_tointg(ASMState *as, IRIns *ir, Reg left)
   Reg tmp = ra_scratch(as, rset_exclude(RSET_GPR, left));
   Reg dest = ra_dest(as, ir, RSET_GPR);
   asm_guard(as, RID_PRED0, 1);
-  emit_alopf7_rr(as, 0, E2K_FCMPEQDB, left, tmp, RID_PRED0, &as->mcp);
-  emit_alopf2_r(as, 0, E2K_ISTOFD, dest, tmp, &as->mcp);
-  emit_alopf2_r(as, 0, E2K_FDTOISTR, left, dest, &as->mcp);
+  emit_alopf7_rr(as, 0, E2K_FCMPEQDB, left, tmp, RID_PRED0);
+  emit_alopf2_r(as, 0, E2K_ISTOFD, dest, tmp);
+  emit_alopf2_r(as, 0, E2K_FDTOISTR, left, dest);
 }
 
 static void asm_tobit(ASMState *as, IRIns *ir)
@@ -300,7 +305,7 @@ static void asm_tobit(ASMState *as, IRIns *ir)
   Reg left = ra_alloc1(as, ir->op1, RSET_GPR);
   Reg right = ra_alloc1(as, ir->op2, rset_exclude(RSET_GPR, left));
   Reg dest = ra_dest(as, ir, RSET_GPR);
-  emit_alopf1_rr(as, 0, E2K_FADDD, left, right, dest, &as->mcp);
+  emit_alopf1_rr(as, 0, E2K_FADDD, left, right, dest);
 }
 
 static void asm_conv(ASMState *as, IRIns *ir)
@@ -316,33 +321,33 @@ static void asm_conv(ASMState *as, IRIns *ir)
     if (stfp) { /* FP to FP conversion */
       left = ra_alloc1(as, ir->op1, RSET_GPR);
       op = (st == IRT_NUM) ? E2K_FDTOFS : E2K_FSTOFD;
-      emit_alopf2_r(as, 0, op, left, dest, &as->mcp);
+      emit_alopf2_r(as, 0, op, left, dest);
     } else if (st == IRT_U32) { /* U32 to FP conversion */
       left = ra_alloc1(as, ir->op1, RSET_GPR);
       op = irt_isnum(ir->t) ? E2K_IDTOFD : E2K_IDTOFS;
-      emit_alopf2_r(as, 0, op, dest, dest, &as->mcp);
-      emit_alopf1_ir(as, 0, E2K_SXT, SXT_WZ, left, dest, &as->mcp);
+      emit_alopf2_r(as, 0, op, dest, dest);
+      emit_alopf1_ir(as, 0, E2K_SXT, SXT_WZ, left, dest);
     } else if (st == IRT_U64) { /* U64 to FP conversion */
       RegSet allow = RSET_GPR;
       left = ra_alloc1(as, ir->op1, rset_clear(allow, dest));
       Reg tmp1 = ra_scratch(as, rset_clear(allow, left));
       Reg tmp2 = ra_scratch(as, rset_clear(allow, tmp1));
       op = irt_isnum(ir->t) ? E2K_IDTOFD : E2K_IDTOFS;
-      emit_mrgc(as, emit_alopf1_rr(as, 1, irt_isnum(ir->t) ? E2K_MERGED : E2K_MERGES,
-                                  tmp2, tmp1, dest, 0), RID_PRED0, 0, &as->mcp);
+      emit_alopf1_rr_mrgc(as, 1, irt_isnum(ir->t) ? E2K_MERGED : E2K_MERGES,
+                          tmp2, tmp1, dest, RID_PRED0, 0);
       emit_alopf1_rr(as, 1, irt_isnum(ir->t) ? E2K_FADDD : E2K_FADDS,
-                     tmp1, tmp1, tmp1, &as->mcp);
-      emit_alopf2_r(as, 1, op, left, tmp2, &as->mcp);
-      emit_alopf7_ri(as, 0, E2K_CMPLDB, left, 0x0, RID_PRED0, &as->mcp);
-      emit_alopf2_r(as, 1, op, tmp1, tmp1, &as->mcp);
-      emit_alopf1_rr(as, 1, E2K_ORD, tmp2, tmp1, tmp1, &as->mcp);
-      emit_alopf1_ri(as, 1, E2K_SHRD, left, 0x1, tmp2, 0);
-      emit_alopf1_ri(as, 1, E2K_ANDD, left, 0x1, tmp1, &as->mcp);
+                     tmp1, tmp1, tmp1);
+      emit_alopf2_r(as, 1, op, left, tmp2);
+      emit_alopf7_ri(as, 0, E2K_CMPLDB, left, 0x0, RID_PRED0);
+      emit_alopf2_r(as, 1, op, tmp1, tmp1);
+      emit_alopf1_rr(as, 1, E2K_ORD, tmp2, tmp1, tmp1);
+      emit_alopf1_ri(as, 1, E2K_SHRD, left, 0x1, tmp2);
+      emit_alopf1_ri(as, 1, E2K_ANDD, left, 0x1, tmp1);
     } else {
       left = ra_alloc1(as, ir->op1, RSET_GPR);
       op = irt_isnum(ir->t) ? (st64 ? E2K_IDTOFD : E2K_ISTOFD) :
                               (st64 ? E2K_IDTOFS : E2K_ISTOFS);
-      emit_alopf2_r(as, 0, op, left, dest, &as->mcp);
+      emit_alopf2_r(as, 0, op, left, dest);
     }
   } else if (stfp) { /* FP to INT conversion */
     left = ra_alloc1(as, ir->op1, RSET_GPR);
@@ -357,24 +362,22 @@ static void asm_conv(ASMState *as, IRIns *ir)
       if (irt_isu64(ir->t)) { /* FP to U64 */
         intptr_t k = (st == IRT_NUM) ? 0x43e0000000000000 : 0x5f000000;
         op = (st == IRT_NUM) ? E2K_FDTOIDTR : E2K_FSTOIDTR;
-        emit_rlp(as, emit_alopf1_ri(as, 1, E2K_ADDD, tmp, 0x8000000000000000,
-                                    dest, 0), RID_PRED0, 1, 0);
-        emit_rlp(as, emit_alopf2_r(as, 0, op, left, dest, 0), RID_PRED0, 0, &as->mcp);
-        emit_alopf2_r(as, 1, op, tmp, tmp, &as->mcp);
-        emit_nop(as, 2);
+        emit_alopf1_ri_rlp(as, 1, E2K_ADDD, tmp, 0x8000000000000000, dest, RID_PRED0, 1);
+        emit_alopf2_r_rlp(as, 0, op, left, dest, RID_PRED0, 0);
+        emit_alopf2_r(as, 1, op, tmp, tmp);
         emit_alopf7_ri(as, 0, (st == IRT_NUM) ? E2K_FCMPLTDB : E2K_FCMPLTSB,
-                       left, k, RID_PRED0, 0);
+                       left, k, RID_PRED0);
         emit_alopf1_ri(as, 1, (st == IRT_NUM) ? E2K_FSUBD : E2K_FSUBS,
-                       left, k, tmp, &as->mcp);
+                       left, k, tmp);
       } else if (irt_isu32(ir->t)) { /* FP to U32 */
         op = (st == IRT_NUM) ? E2K_FDTOIDTR : E2K_FSTOIDTR;
-        emit_alopf1_ri(as, 0, E2K_GETFD, dest, 0x800, dest, &as->mcp);
-        emit_alopf2_r(as, 0, op, left, dest, &as->mcp);
+        emit_alopf1_ri(as, 0, E2K_GETFD, dest, 0x800, dest);
+        emit_alopf2_r(as, 0, op, left, dest);
       } else {
         op = irt_is64(ir->t) ?
              (st == IRT_NUM ? E2K_FDTOIDTR : E2K_FSTOIDTR) :
              (st == IRT_NUM ? E2K_FDTOISTR : E2K_FSTOISTR);
-        emit_alopf2_r(as, 0, op, left, dest, &as->mcp);
+        emit_alopf2_r(as, 0, op, left, dest);
       }
     }
   } else { /* INT to INT conversion */
@@ -384,7 +387,7 @@ static void asm_conv(ASMState *as, IRIns *ir)
       emit_alopf1_ir(as, 0, E2K_SXT,
                      (ir->op2 & IRCONV_SEXT) ?
                      (st == IRT_I8 ? SXT_BS : SXT_HS) :
-                     (st == IRT_U8 ? SXT_BZ : SXT_HZ), left, dest, &as->mcp);
+                     (st == IRT_U8 ? SXT_BZ : SXT_HZ), left, dest);
     } else { /* 32/64 bit integer conversions */
       if (irt_is64(ir->t)) {
         if (st64) { /* 64/64 bit no-op (cast) */
@@ -392,14 +395,14 @@ static void asm_conv(ASMState *as, IRIns *ir)
         } else {
           left = ra_alloc1(as, ir->op1, RSET_GPR);
           emit_alopf1_ir(as, 0, E2K_SXT, (ir->op2 & IRCONV_SEXT) ?
-                                         SXT_WS : SXT_WZ, left, dest, &as->mcp);
+                                         SXT_WS : SXT_WZ, left, dest);
         }
       } else {
         if (st64 && !(ir->op2 & IRCONV_NONE)) {
         /* This is either a 32 bit reg/reg mov which zeroes the hiword
            or a load of the loword from a 64 bit address. */
           left = ra_alloc1(as, ir->op1, RSET_GPR);
-          emit_alopf1_ir(as, 0, E2K_SXT, SXT_WZ, left, dest, &as->mcp);
+          emit_alopf1_ir(as, 0, E2K_SXT, SXT_WZ, left, dest);
         } else { /* 32/32 bit no-op (cast). */
           ra_leftov(as, dest, ir->op1);
         }
@@ -418,13 +421,13 @@ static void asm_strto(ASMState *as, IRIns *ir)
   ra_evictset(as, drop);
   ofs = sps_scale(ir->s);
   asm_guard(as, RID_PRED0, 0); /* Test return status. */
-  emit_alopf7_ri(as, 0, E2K_CMPEDB, RID_RET, 0, RID_PRED0, &as->mcp);
+  emit_alopf7_ri(as, 0, E2K_CMPEDB, RID_RET, 0, RID_PRED0);
   args[0] = ir->op1;      /* GCstr *str */
   args[1] = ASMREF_TMP1;  /* TValue *n  */
   asm_gencall(as, ci, args);
   /* Store the result to the spill slot or temp slots. */
   emit_alopf1_ri(as, 0, E2K_ADDD, RID_SP, ofs,
-                 ra_releasetmp(as, ASMREF_TMP1), &as->mcp);
+                 ra_releasetmp(as, ASMREF_TMP1));
 }
 
 /* -- Memory references --------------------------------------------------- */
@@ -440,18 +443,18 @@ static void asm_tvstore64(ASMState *as, Reg base, intptr_t ofs, IRRef ref)
     TValue k;
     lj_ir_kvalue(as->J->L, &k, ir);
     Reg tmp = ra_allock(as, (int64_t)k.u64, allow);
-    emit_alopf3_ri(as, 0, E2K_STD, base, ofs, tmp, &as->mcp);
+    emit_alopf3_ri(as, 0, E2K_STD, base, ofs, tmp);
   } else {
     Reg src = ra_alloc1(as, ref, allow);
     allow = rset_exclude(allow, src);
     intptr_t type = (intptr_t)irt_toitype(ir->t) << 47;
     Reg tmp = ra_scratch(as, allow);
-    emit_alopf3_ri(as, 0, E2K_STD, base, ofs, tmp, &as->mcp);
+    emit_alopf3_ri(as, 0, E2K_STD, base, ofs, tmp);
     if (irt_isinteger(ir->t)) {
-      emit_alopf1_ri(as, 0, E2K_ADDD, tmp, type, tmp, &as->mcp);
-      emit_alopf1_ir(as, 0, E2K_SXT, SXT_WZ, src, tmp, &as->mcp);
+      emit_alopf1_ri(as, 0, E2K_ADDD, tmp, type, tmp);
+      emit_alopf1_ir(as, 0, E2K_SXT, SXT_WZ, src, tmp);
     } else {
-      emit_alopf1_ri(as, 0, E2K_ADDD, src, type, tmp, &as->mcp);
+      emit_alopf1_ri(as, 0, E2K_ADDD, src, type, tmp);
     }
   }
 }
@@ -468,7 +471,7 @@ static void asm_tvptr(ASMState *as, Reg dest, IRRef ref, MSize mode)
         return;
       }
       Reg src = ra_alloc1(as, ref, RSET_GPR);
-      emit_alopf3_ri(as, 0, E2K_STD, dest, 0, src, &as->mcp);
+      emit_alopf3_ri(as, 0, E2K_STD, dest, 0, src);
     } else {
       /* Otherwise use g->tmptv to hold the TValue. */
       asm_tvstore64(as, dest, 0, ref);
@@ -488,18 +491,18 @@ static void asm_aref(ASMState *as, IRIns *ir)
     IRRef refa = ofs ? tab : ir->op1;
     ofs += 8*IR(ir->op2)->i;
     base = ra_alloc1(as, refa, allow);
-    emit_alopf1_ri(as, 0, E2K_ADDD, base, ofs, dest, &as->mcp);
+    emit_alopf1_ri(as, 0, E2K_ADDD, base, ofs, dest);
   } else {
     base = ra_alloc1(as, ir->op1, allow);
     allow = rset_exclude(allow, base);
     idx = ra_alloc1(as, ir->op2, allow);
     allow = rset_exclude(allow, idx);
     tmp = ra_scratch(as, allow);
-    emit_alopf1_rr(as, 0, E2K_ADDD, base, tmp, dest, &as->mcp);
-    emit_alopf1_ri(as, 0, E2K_SHLD, idx, 3, tmp, &as->mcp);
+    emit_alopf1_rr(as, 0, E2K_ADDD, base, tmp, dest);
+    emit_alopf1_ri(as, 0, E2K_SHLD, idx, 3, tmp);
     /* if its integer extend first */
     if (irt_isinteger(IR(ir->op2)->t)) {
-      emit_alopf1_ir(as, 0, E2K_SXT, SXT_WS, idx, idx, &as->mcp);
+      emit_alopf1_ir(as, 0, E2K_SXT, SXT_WS, idx, idx);
     }
   }
 }
@@ -541,23 +544,23 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
   }
 
   /* Follow hash chain until the end. */
-  emit_ct(as, RID_CTPR1, RID_PRED3, 1, &as->mcp);
-  emit_alopf1_ri(as, 0, E2K_ADDD, tmp3, 0, dest, &as->mcp);
+  emit_ct(as, RID_CTPR1, RID_PRED3, 1);
+  emit_alopf1_ri(as, 0, E2K_ADDD, tmp3, 0, dest);
   l_next = emit_label(as);
 
   /* Type  and value comparison. */
   if (merge == IR_EQ) {
     asm_guard(as, RID_PRED2, 0);
   } else {
-    emit_ibranch(as, l_end, RID_PRED2, 0, &as->mcp);
+    emit_ibranch(as, l_end, RID_PRED2, 0);
   }
 
   if (irt_isnum(kt)) {
-    emit_ibranch(as, l_next, RID_PRED1, 1, &as->mcp);
-    emit_alopf7_ri(as, 0, E2K_CMPBSB, tmp2, (int32_t)LJ_TISNUM, RID_PRED1, 0);
-    emit_alopf7_ri(as, 1, E2K_CMPEDB, tmp3, 0, RID_PRED3, &as->mcp);
-    emit_alopf7_rr(as, 0, E2K_FCMPEQDB, tmp1, key, RID_PRED2, 0);
-    emit_alopf1_ri(as, 0, E2K_SARD, tmp1, 47, tmp2, &as->mcp);
+    emit_ibranch(as, l_next, RID_PRED1, 1);
+    emit_alopf7_ri(as, 0, E2K_CMPBSB, tmp2, (int32_t)LJ_TISNUM, RID_PRED1);
+    emit_alopf7_ri(as, 1, E2K_CMPEDB, tmp3, 0, RID_PRED3);
+    emit_alopf7_rr(as, 0, E2K_FCMPEQDB, tmp1, key, RID_PRED2);
+    emit_alopf1_ri(as, 0, E2K_SARD, tmp1, 47, tmp2);
   } else {
     if (isk) {
       intptr_t k = 0;
@@ -567,67 +570,64 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
         lj_assertA(irt_ispri(kt) && !irt_isnil(kt), "bad HREF key type");
         k = ~((intptr_t)~irt_toitype(kt) << 47);
       }
-      emit_alopf7_ri(as, 0, E2K_CMPEDB, tmp1, k, RID_PRED2, 0);
+      emit_alopf7_ri(as, 0, E2K_CMPEDB, tmp1, k, RID_PRED2);
     } else {
-      emit_alopf7_rr(as, 0, E2K_CMPEDB, tmp1, tmp2, RID_PRED2, 0);
+      emit_alopf7_rr(as, 0, E2K_CMPEDB, tmp1, tmp2, RID_PRED2);
     }
-    emit_alopf7_ri(as, 1, E2K_CMPEDB, tmp3, 0, RID_PRED3, &as->mcp);
+    emit_alopf7_ri(as, 1, E2K_CMPEDB, tmp3, 0, RID_PRED3);
   }
-  emit_alopf1_ri(as, 0, E2K_LDD, dest, (intptr_t)offsetof(Node, key.u64), tmp1, 0);
-  emit_alopf1_ri(as, 1, E2K_LDD, dest, (intptr_t)offsetof(Node, next), tmp3, &as->mcp);
+  emit_alopf1_ri(as, 0, E2K_LDD, dest, (intptr_t)offsetof(Node, key.u64), tmp1);
+  emit_alopf1_ri(as, 1, E2K_LDD, dest, (intptr_t)offsetof(Node, next), tmp3);
   l_loop = emit_label(as);
 
   if (!isk && irt_isaddr(kt)) {
     emit_alopf1_ri(as, 0, E2K_ADDD, key, (intptr_t)irt_toitype(kt) << 47,
-                   tmp2, 0);
+                   tmp2);
   }
 
   /* Load main position relative to tab->node into dest. */
   khash = isk ? ir_khash(as, irkey) : 1;
   if (khash == 0) {
     emit_alopf1_ri(as, 0, E2K_LDD, tab, (intptr_t)offsetof(GCtab, node),
-                   dest, &as->mcp);
+                   dest);
   } else {
-    emit_alopf1_rr(as, 0, E2K_ADDD, dest, tmp1, dest, &as->mcp);
-    emit_alopf1_ir(as, 0, E2K_SXT, SXT_WS, tmp1, tmp1, &as->mcp);
+    emit_alopf1_rr(as, 0, E2K_ADDD, dest, tmp1, dest);
+    emit_alopf1_ir(as, 0, E2K_SXT, SXT_WS, tmp1, tmp1);
     lj_assertA(sizeof(Node) == 24, "bad Node size");
-    emit_alopf1_rr(as, 0, E2K_SUBS, tmp2, tmp1, tmp1, &as->mcp);
-    emit_alopf1_ri(as, 0, E2K_SHLS, tmp1, 3, tmp1, 0);
-    emit_alopf1_ri(as, 0, E2K_SHLS, tmp1, 5, tmp2, &as->mcp);
+    emit_alopf1_rr(as, 0, E2K_SUBS, tmp2, tmp1, tmp1);
+    emit_alopf1_ri(as, 0, E2K_SHLS, tmp1, 3, tmp1);
+    emit_alopf1_ri(as, 0, E2K_SHLS, tmp1, 5, tmp2);
     if (isk) {
-      emit_alopf1_ri(as, 0, E2K_ANDS, tmp2, khash, tmp1, &as->mcp);
+      emit_alopf1_ri(as, 0, E2K_ANDS, tmp2, khash, tmp1);
     } else {
-      emit_alopf1_rr(as, 0, E2K_ANDS, tmp2, tmp1, tmp1, &as->mcp);
+      emit_alopf1_rr(as, 0, E2K_ANDS, tmp2, tmp1, tmp1);
     }
-    emit_alopf1_ri(as, 0, E2K_LDD, tab, (intptr_t)offsetof(GCtab, node),
-                   dest, 0);
-    emit_alopf1_ri(as, 0, E2K_LDW, tab, (intptr_t)offsetof(GCtab, hmask),
-                   tmp2, 0);
+    emit_alopf1_ri(as, 0, E2K_LDD, tab, (intptr_t)offsetof(GCtab, node), dest);
+    emit_alopf1_ri(as, 0, E2K_LDW, tab, (intptr_t)offsetof(GCtab, hmask), tmp2);
     if (isk) {
       /* Nothing to do */
     } else if (irt_isstr(kt)) {
-      emit_alopf1_ri(as, 0, E2K_LDW, key, (intptr_t)offsetof(GCstr, sid),
-                     tmp1, 0);
+      emit_alopf1_ri(as, 0, E2K_LDW, key, (intptr_t)offsetof(GCstr, sid), tmp1);
     } else { /*  Must match with hash*() in lj_tab.c. */
-      emit_alopf1_rr(as, 0, E2K_SUBS, tmp1, tmp2, tmp1, &as->mcp);
-      emit_alopf1_ri(as, 0, E2K_SCLS, tmp2, HASH_ROT3, tmp2, 0);
-      emit_alopf1_rr(as, 0, E2K_XORS, tmp1, tmp2, tmp1, &as->mcp);
-      emit_alopf1_ri(as, 0, E2K_SCLS, tmp1, (HASH_ROT2+HASH_ROT1), tmp1, 0);
-      emit_alopf1_rr(as, 0, E2K_SUBS, tmp2, dest, tmp2, &as->mcp);
-      emit_alopf1_rr(as, 0, E2K_XORS, tmp2, tmp1, tmp2, 0);
-      emit_alopf1_ri(as, 0, E2K_SCLS, tmp1, HASH_ROT1, dest, &as->mcp);
+      emit_alopf1_rr(as, 0, E2K_SUBS, tmp1, tmp2, tmp1);
+      emit_alopf1_ri(as, 0, E2K_SCLS, tmp2, HASH_ROT3, tmp2);
+      emit_alopf1_rr(as, 0, E2K_XORS, tmp1, tmp2, tmp1);
+      emit_alopf1_ri(as, 0, E2K_SCLS, tmp1, (HASH_ROT2+HASH_ROT1), tmp1);
+      emit_alopf1_rr(as, 0, E2K_SUBS, tmp2, dest, tmp2);
+      emit_alopf1_rr(as, 0, E2K_XORS, tmp2, tmp1, tmp2);
+      emit_alopf1_ri(as, 0, E2K_SCLS, tmp1, HASH_ROT1, dest);
       if (irt_isnum(kt)) {
-        emit_alopf1_rr(as, 0, E2K_ADDS, tmp1, tmp1, tmp1, &as->mcp);
-        emit_alopf1_ri(as, 0, E2K_SHRD, key, 32, tmp1, 0);
-        emit_alopf1_ri(as, 0, E2K_ADDS, key, 0, tmp2, 0);
+        emit_alopf1_rr(as, 0, E2K_ADDS, tmp1, tmp1, tmp1);
+        emit_alopf1_ri(as, 0, E2K_SHRD, key, 32, tmp1);
+        emit_alopf1_ri(as, 0, E2K_ADDS, key, 0, tmp2);
       } else {
-        emit_alopf1_ri(as, 0, E2K_SHRD, tmp1, 32, tmp1, &as->mcp);
-        emit_alopf1_ri(as, 0, E2K_ADDS, key, 0, tmp2, 0);
+        emit_alopf1_ri(as, 0, E2K_SHRD, tmp1, 32, tmp1);
+        emit_alopf1_ri(as, 0, E2K_ADDS, key, 0, tmp2);
         emit_alopf1_ri(as, 0, E2K_ADDD, key, (intptr_t)irt_toitype(kt) << 47,
-                       tmp1, 0);
+                       tmp1);
       }
     }
-    emit_disp(as, RID_CTPR1, l_loop, &as->mcp);
+    emit_disp(as, RID_CTPR1, l_loop);
   }
 }
 
@@ -654,11 +654,11 @@ static void asm_hrefk(ASMState *as, IRIns *ir)
     k = ((int64_t)irt_toitype(irkey->t) << 47) | (int64_t)ir_kgc(irkey);
   }
   if (ra_hasreg(dest)) {
-    emit_alopf1_ri(as, 0, E2K_ADDD, node, ofs, dest, &as->mcp);
+    emit_alopf1_ri(as, 0, E2K_ADDD, node, ofs, dest);
   }
   asm_guard(as, RID_PRED0, 1);
-  emit_alopf7_ri(as, 0, E2K_CMPEDB, key, k, RID_PRED0, &as->mcp);
-  emit_alopf1_ri(as, 0, E2K_LDD, node, kofs, key, &as->mcp);
+  emit_alopf7_ri(as, 0, E2K_CMPEDB, key, k, RID_PRED0);
+  emit_alopf1_ri(as, 0, E2K_LDD, node, kofs, key);
 }
 
 static void asm_uref(ASMState *as, IRIns *ir)
@@ -671,22 +671,21 @@ static void asm_uref(ASMState *as, IRIns *ir)
     GCfunc *fn = ir_kfunc(IR(ir->op1));
     MRef *v = &gcref(fn->l.uvptr[(ir->op2 >> 8)])->uv.v;
     ofs = dispofs(as, v);
-    emit_alopf1_ri(as, 0, E2K_LDD, RID_DISPATCH, ofs, dest, &as->mcp);
+    emit_alopf1_ri(as, 0, E2K_LDD, RID_DISPATCH, ofs, dest);
   } else {
     if (guarded) {
       tmp = ra_scratch(as, rset_exclude(RSET_GPR, dest));
       asm_guard(as, RID_PRED0, ir->o == IR_UREFC ? 0 : 1);
-      emit_alopf7_ri(as, 0, E2K_CMPEDB, tmp, 0, RID_PRED0, &as->mcp);
+      emit_alopf7_ri(as, 0, E2K_CMPEDB, tmp, 0, RID_PRED0);
     }
     ofs = ir->o == IR_UREFC ? (intptr_t)offsetof(GCupval, tv)
                              : (intptr_t)offsetof(GCupval, v);
     int op = ir->o == IR_UREFC ? E2K_ADDD : E2K_LDD;
-    emit_alopf1_ri(as, 0, op, dest, ofs, dest, 0);
+    emit_alopf1_ri(as, 0, op, dest, ofs, dest);
     if (guarded) {
       ofs = (intptr_t)offsetof(GCupval, closed);
-      emit_alopf1_ri(as, 0, E2K_LDB, dest, ofs, tmp, 0);
+      emit_alopf1_ri(as, 0, E2K_LDB, dest, ofs, tmp);
     }
-    emit_bundle_finalize(as, &as->mcp);
     if (irref_isk(ir->op1)) {
       GCfunc *fn = ir_kfunc(IR(ir->op1));
       GCobj *o = gcref(fn->l.uvptr[(ir->op2 >> 8)]);
@@ -695,7 +694,7 @@ static void asm_uref(ASMState *as, IRIns *ir)
       ofs = (intptr_t)offsetof(GCfuncL, uvptr) +
             (intptr_t)sizeof(MRef) * (intptr_t)(ir->op2 >> 8);
       emit_alopf1_ri(as, 0, E2K_LDD, ra_alloc1(as, ir->op1, RSET_GPR),
-                     ofs, dest, &as->mcp);
+                     ofs, dest);
     }
   }
 }
@@ -714,14 +713,13 @@ static void asm_strref(ASMState *as, IRIns *ir)
   IRIns *irr = IR(ir->op2);
   intptr_t ofs = sizeof(GCstr);
   if (irref_isk(ir->op2)) {
-    emit_alopf1_ri(as, 0, E2K_ADDD, base, ofs + irr->i,
-                   dest, &as->mcp);
+    emit_alopf1_ri(as, 0, E2K_ADDD, base, ofs + irr->i, dest);
   } else {
     /* base + ofs + right(32-bit) */
     Reg right = ra_alloc1(as, ir->op2, rset_clear(allow, base));
-    emit_alopf1_rr(as, 0, E2K_ADDD, dest, right, dest, &as->mcp);
-    emit_alopf1_ir(as, 0, E2K_SXT, SXT_WS, right, right, 0);
-    emit_alopf1_ri(as, 0, E2K_ADDD, base, ofs, dest, &as->mcp);
+    emit_alopf1_rr(as, 0, E2K_ADDD, dest, right, dest);
+    emit_alopf1_ir(as, 0, E2K_SXT, SXT_WS, right, right);
+    emit_alopf1_ri(as, 0, E2K_ADDD, base, ofs, dest);
   }
 }
 
@@ -749,7 +747,7 @@ static uint32_t asm_loadins(ASMState *as, IRIns *ir, Reg dest)
   }
   /* ldb and ldh unsigned, need sign extension */
   if (need_sxt) {
-    emit_alopf1_ir(as, 0, E2K_SXT, sxt_cop, dest, dest, &as->mcp);
+    emit_alopf1_ir(as, 0, E2K_SXT, sxt_cop, dest, dest);
   }
   return op;
 }
@@ -788,7 +786,7 @@ static void asm_fload(ASMState *as, IRIns *ir)
     ofs = field_ofs[ir->op2];
     base = ra_alloc1(as, ir->op1, RSET_GPR);
   }
-  emit_alopf1_ri(as, 0, op, base, ofs, dest, &as->mcp);
+  emit_alopf1_ri(as, 0, op, base, ofs, dest);
 }
 
 static void asm_fstore(ASMState *as, IRIns *ir)
@@ -799,7 +797,7 @@ static void asm_fstore(ASMState *as, IRIns *ir)
     Reg base = ra_alloc1(as, irf->op1, rset_exclude(RSET_GPR, src));
     intptr_t ofs = field_ofs[irf->op2];
     lj_assertA(!irt_isfp(ir->t), "bad FP FSTORE");
-    emit_alopf3_ri(as, 0, asm_storeins(as, ir), base, ofs, src, &as->mcp);
+    emit_alopf3_ri(as, 0, asm_storeins(as, ir), base, ofs, src);
   }
 }
 
@@ -809,9 +807,9 @@ static void asm_xload(ASMState *as, IRIns *ir)
   Reg dest = ra_dest(as, ir, RSET_GPR);
   IRRef ref = asm_fusexref(as, ir->op1, &ofs);
   Reg base = ra_alloc1(as, ref, RSET_GPR);
-  emit_alopf1_ri(as, 0, asm_loadins(as, ir, dest), base, ofs, dest, &as->mcp);
+  emit_alopf1_ri(as, 0, asm_loadins(as, ir, dest), base, ofs, dest);
   if (!irt_is64(IR(ref)->t))
-    emit_alopf1_ir(as, 0, E2K_SXT, SXT_WS, base, base, &as->mcp);
+    emit_alopf1_ir(as, 0, E2K_SXT, SXT_WS, base, base);
 }
 
 static void asm_xstore(ASMState *as, IRIns *ir)
@@ -821,9 +819,9 @@ static void asm_xstore(ASMState *as, IRIns *ir)
     Reg src = ra_alloc1(as, ir->op2, RSET_GPR);
     IRRef ref = asm_fusexref(as, ir->op1, &ofs);
     Reg base = ra_alloc1(as, ref, rset_exclude(RSET_GPR, src));
-    emit_alopf3_ri(as, 0, asm_storeins(as, ir), base, ofs, src, &as->mcp);
+    emit_alopf3_ri(as, 0, asm_storeins(as, ir), base, ofs, src);
     if (!irt_is64(IR(ref)->t))
-      emit_alopf1_ir(as, 0, E2K_SXT, SXT_WS, base, base, &as->mcp);
+      emit_alopf1_ir(as, 0, E2K_SXT, SXT_WS, base, base);
   }
 }
 
@@ -839,9 +837,9 @@ static void asm_ahuvload(ASMState *as, IRIns *ir)
     dest = ra_dest(as, ir, allow);
     allow = rset_exclude(allow, dest);
     if (irt_isaddr(t)) {
-      emit_alopf1_ri(as, 0, E2K_GETFD, dest, 0xbc0, dest, &as->mcp);
+      emit_alopf1_ri(as, 0, E2K_GETFD, dest, 0xbc0, dest);
     } else if (irt_isint(t)) {
-      emit_alopf1_ir(as, 0, E2K_SXT, SXT_WZ, dest, dest, &as->mcp);
+      emit_alopf1_ir(as, 0, E2K_SXT, SXT_WZ, dest, dest);
     }
   }
   base = asm_fuseahuref(as, ir->op1, &ofs, allow);
@@ -852,10 +850,10 @@ static void asm_ahuvload(ASMState *as, IRIns *ir)
                (int32_t)irt_toitype(t);
   asm_guard(as, RID_PRED0, 1);
   emit_alopf7_ri(as, 0, irt_isnum(t) ? E2K_CMPBSB : E2K_CMPESB,
-                 type, k, RID_PRED0, &as->mcp);
+                 type, k, RID_PRED0);
   if (!ra_hasreg(dest)) dest = type;
-  emit_alopf1_ri(as, 0, E2K_SARD, dest, 47, type, &as->mcp);
-  emit_alopf1_ri(as, 0, E2K_LDD, base, ofs, dest, &as->mcp);
+  emit_alopf1_ri(as, 0, E2K_SARD, dest, 47, type);
+  emit_alopf1_ri(as, 0, E2K_LDD, base, ofs, dest);
 }
 
 static void asm_ahustore(ASMState *as, IRIns *ir)
@@ -870,7 +868,7 @@ static void asm_ahustore(ASMState *as, IRIns *ir)
     src = ra_alloc1(as, ir->op2, allow);
     allow = rset_exclude(allow, src);
     base = asm_fuseahuref(as, ir->op1, &ofs, allow);
-    emit_alopf3_ri(as, 0, E2K_STD, base, ofs, src, &as->mcp);
+    emit_alopf3_ri(as, 0, E2K_STD, base, ofs, src);
   } else {
     Reg tmp = RID_NONE;
     if (irt_ispri(ir->t)) {
@@ -884,13 +882,13 @@ static void asm_ahustore(ASMState *as, IRIns *ir)
       type = (intptr_t)irt_toitype(ir->t) << 47;
     }
     base = asm_fuseahuref(as, ir->op1, &ofs, allow);
-    emit_alopf3_ri(as, 0, E2K_STD, base, ofs, tmp, &as->mcp);
+    emit_alopf3_ri(as, 0, E2K_STD, base, ofs, tmp);
     if (ra_hasreg(src)) {
       if (irt_isinteger(ir->t)) {
-        emit_alopf1_ri(as, 0, E2K_ADDD, tmp, type, tmp, &as->mcp);
-        emit_alopf1_ir(as, 0, E2K_SXT, SXT_WZ, src, tmp, &as->mcp);
+        emit_alopf1_ri(as, 0, E2K_ADDD, tmp, type, tmp);
+        emit_alopf1_ir(as, 0, E2K_SXT, SXT_WZ, src, tmp);
       } else {
-        emit_alopf1_ri(as, 0, E2K_ADDD, src, type, tmp, &as->mcp);
+        emit_alopf1_ri(as, 0, E2K_ADDD, src, type, tmp);
       }
     }
   }
@@ -919,14 +917,14 @@ static void asm_sload(ASMState *as, IRIns *ir)
     allow = rset_clear(allow, dest);
     if (ir->op2 & IRSLOAD_CONVERT) {
       emit_alopf2_r(as, 0, irt_isint(t) ? E2K_FDTOISTR : E2K_ISTOFD,
-                    dest, dest, &as->mcp);
+                    dest, dest);
       t.irt = irt_isint(t) ? IRT_NUM : IRT_INT;
     } else if (irt_isaddr(t)) {
       /* Clear type from pointers. */
-      emit_alopf1_ri(as, 0, E2K_GETFD, dest, 0xbc0, dest, &as->mcp);
+      emit_alopf1_ri(as, 0, E2K_GETFD, dest, 0xbc0, dest);
     } else if (irt_isint(t) && (ir->op2 & IRSLOAD_TYPECHECK)) {
       /* Sign-extend integers. */
-      emit_alopf1_ir(as, 0, E2K_SXT, SXT_WS, dest, dest, &as->mcp);
+      emit_alopf1_ir(as, 0, E2K_SXT, SXT_WS, dest, dest);
     }
   }
   base = ra_alloc1(as, REF_BASE, allow);
@@ -937,25 +935,25 @@ static void asm_sload(ASMState *as, IRIns *ir)
     if (irt_ispri(t)) {
       asm_guard(as, RID_PRED0, 1);
       intptr_t k = ~((int64_t)~irt_toitype(t) << 47);
-      emit_alopf7_ri(as, 0, E2K_CMPEDB, type, k, RID_PRED0, &as->mcp);
+      emit_alopf7_ri(as, 0, E2K_CMPEDB, type, k, RID_PRED0);
     } else if (ir->op2 & IRSLOAD_KEYINDEX) {
       asm_guard(as, RID_PRED0, 1);
       intptr_t k = (int32_t)LJ_KEYINDEX;
-      emit_alopf7_ri(as, 0, E2K_CMPESB, type, k, RID_PRED0, &as->mcp);
-      emit_alopf1_ri(as, 0, E2K_SHRD, dest, 32, type, &as->mcp);
+      emit_alopf7_ri(as, 0, E2K_CMPESB, type, k, RID_PRED0);
+      emit_alopf1_ri(as, 0, E2K_SHRD, dest, 32, type);
     } else {
       intptr_t k = irt_isnum(t) ? (int32_t)LJ_TISNUM :
                    (int32_t)irt_toitype(t);
       asm_guard(as, RID_PRED0, 1);
       emit_alopf7_ri(as, 0, irt_isnum(t) ? E2K_CMPBSB : E2K_CMPESB,
-                     type, k, RID_PRED0, &as->mcp);
-      emit_alopf1_ri(as, 0, E2K_SARD, dest, 47, type, &as->mcp);
+                     type, k, RID_PRED0);
+      emit_alopf1_ri(as, 0, E2K_SARD, dest, 47, type);
     }
     op = E2K_LDD;
   } else {
     op = irt_isint(t) ? E2K_LDW : E2K_LDD;
   }
-  emit_alopf1_ri(as, 0, op, base, ofs, dest, &as->mcp);
+  emit_alopf1_ri(as, 0, op, base, ofs, dest);
 }
 
 /* -- Allocations --------------------------------------------------------- */
@@ -982,8 +980,7 @@ static void asm_cnew(ASMState *as, IRIns *ir)
   /* Initialize immutable cdata object. */
   if (ir->o == IR_CNEWI) {
     emit_alopf3_ri(as, 0, sz == 8 ? E2K_STD : E2K_STW, RID_RET,
-                   (intptr_t)sizeof(GCcdata),
-                   ra_alloc1(as, ir->op2, allow), &as->mcp);
+                   (intptr_t)sizeof(GCcdata), ra_alloc1(as, ir->op2, allow));
     lj_assertA(sz == 4 || sz == 8, "bad CNEWI size %d", sz);
   } else if (ir->op2 != REF_NIL) { /* Create VLA/VLS/aligned cdata. */
     ci = &lj_ir_callinfo[IRCALL_lj_cdata_newv];
@@ -1000,11 +997,11 @@ static void asm_cnew(ASMState *as, IRIns *ir)
   Reg tmp1 = ra_scratch(as, allow);
   Reg tmp2 = ra_scratch(as, rset_clear(allow, tmp1));
   emit_alopf3_ri(as, 0, E2K_STB, RID_RET, (intptr_t)offsetof(GCcdata, gct),
-                 tmp1, 0);
+                 tmp1);
   emit_alopf3_ri(as, 0, E2K_STH, RID_RET, (intptr_t)offsetof(GCcdata, ctypeid),
-                 tmp2, &as->mcp);
-  emit_alopf1_ii(as, 0, E2K_ADDD, 0, (intptr_t)(~LJ_TCDATA), tmp1, 0);
-  emit_alopf1_ii(as, 0, E2K_ADDD, 0, (intptr_t)id, tmp2, &as->mcp);
+                 tmp2);
+  emit_alopf1_ii(as, 0, E2K_ADDD, 0, (intptr_t)(~LJ_TCDATA), tmp1);
+  emit_alopf1_ii(as, 0, E2K_ADDD, 0, (intptr_t)id, tmp2);
   args[0] = ASMREF_L;     /* lua_State *L */
   args[1] = ASMREF_TMP1;  /* MSize size   */
   asm_gencall(as, ci, args);
@@ -1024,18 +1021,17 @@ static void asm_tbar(ASMState *as, IRIns *ir)
   Reg tmp = link;
   MCLabel l_end = emit_label(as);
   emit_alopf3_ri(as, 0, E2K_STD, tab, (intptr_t)offsetof(GCtab, gclist),
-                 link, &as->mcp);
+                 link);
   emit_alopf3_ri(as, 0, E2K_STB, tab, (intptr_t)offsetof(GCtab, marked),
-                 mark, &as->mcp);
+                 mark);
   emit_setgl(as, tab, gc.grayagain);
   emit_getgl(as, link, gc.grayagain);
   /* Clear black bit. */
-  emit_alopf1_rr(as, 0, E2K_XORD, tmp, mark, mark, &as->mcp);
-  emit_ibranch(as, l_end, RID_PRED0, 0, &as->mcp);
-  emit_alopf7_ri(as, 0, E2K_CMPEDB, tmp, 0, RID_PRED0, &as->mcp);
-  emit_alopf1_ri(as, 0, E2K_ANDD, mark, LJ_GC_BLACK, tmp, &as->mcp);
-  emit_alopf1_ri(as, 0, E2K_LDB, tab, (intptr_t)offsetof(GCtab, marked),
-                 mark, &as->mcp);
+  emit_alopf1_rr(as, 0, E2K_XORD, tmp, mark, mark);
+  emit_ibranch(as, l_end, RID_PRED0, 0);
+  emit_alopf7_ri(as, 0, E2K_CMPEDB, tmp, 0, RID_PRED0);
+  emit_alopf1_ri(as, 0, E2K_ANDD, mark, LJ_GC_BLACK, tmp);
+  emit_alopf1_ri(as, 0, E2K_LDB, tab, (intptr_t)offsetof(GCtab, marked), mark);
 }
 
 static void asm_obar(ASMState *as, IRIns *ir)
@@ -1057,17 +1053,16 @@ static void asm_obar(ASMState *as, IRIns *ir)
   val = ra_alloc1(as, ir->op2, rset_exclude(RSET_GPR, obj));
   tmp1 = ra_scratch(as, rset_clear(allow, obj));
   tmp2 = ra_scratch(as, rset_clear(allow, tmp1));
-  emit_ct(as, RID_CTPR1, RID_PRED1, 0, &as->mcp);
-  emit_ct(as, RID_CTPR1, RID_PRED2, 0, &as->mcp);
-  emit_alopf7_ri(as, 0, E2K_CMPESB, tmp1, 0, RID_PRED1, 0);
-  emit_alopf7_ri(as, 0, E2K_CMPESB, tmp2, 0, RID_PRED2, &as->mcp);
-  emit_alopf1_ri(as, 0, E2K_ANDS, tmp1, (intptr_t)LJ_GC_BLACK, tmp1, 0);
-  emit_alopf1_ri(as, 0, E2K_ANDS, tmp2, (intptr_t)LJ_GC_WHITES, tmp2, &as->mcp);
+  emit_ct(as, RID_CTPR1, RID_PRED1, 0);
+  emit_ct(as, RID_CTPR1, RID_PRED2, 0);
+  emit_alopf7_ri(as, 0, E2K_CMPESB, tmp1, 0, RID_PRED1);
+  emit_alopf7_ri(as, 0, E2K_CMPESB, tmp2, 0, RID_PRED2);
+  emit_alopf1_ri(as, 0, E2K_ANDS, tmp1, (intptr_t)LJ_GC_BLACK, tmp1);
+  emit_alopf1_ri(as, 0, E2K_ANDS, tmp2, (intptr_t)LJ_GC_WHITES, tmp2);
   emit_alopf1_ri(as, 0, E2K_LDB, obj, (intptr_t)offsetof(GCupval, marked) -
-                                      (intptr_t)offsetof(GCupval, tv), tmp1, 0);
-  emit_alopf1_ri(as, 0, E2K_LDB, val, (intptr_t)offsetof(GChead, marked),
-                 tmp2, 0);
-  emit_disp(as, RID_CTPR1, l_end, &as->mcp);
+                                      (intptr_t)offsetof(GCupval, tv), tmp1);
+  emit_alopf1_ri(as, 0, E2K_LDB, val, (intptr_t)offsetof(GChead, marked), tmp2);
+  emit_disp(as, RID_CTPR1, l_end);
 }
 
 /* -- FP/int arithmetic and logic operations ------------------------------ */
@@ -1078,10 +1073,10 @@ static void asm_alopf1(ASMState *as, IRIns *ir, int op)
   Reg left = ra_hintalloc(as, ir->op1, dest, RSET_GPR);
   Reg right = RID_NONE;
   if (irref_isk(ir->op2)) {
-    emit_alopf1_ri(as, 0, op, left, get_kval(as, ir->op2), dest, &as->mcp);
+    emit_alopf1_ri(as, 0, op, left, get_kval(as, ir->op2), dest);
   } else {
     right = ra_alloc1(as, ir->op2, rset_exclude(RSET_GPR, left));
-    emit_alopf1_rr(as, 0, op, left, right, dest, &as->mcp);
+    emit_alopf1_rr(as, 0, op, left, right, dest);
   }
 }
 
@@ -1097,21 +1092,21 @@ static void asm_arithov(ASMState *as, IRIns *ir)
     int k = IR(ir->op2)->i;
     if (ir->o == IR_SUBOV) k = (int)(~(unsigned int)k+1u);
     asm_guard(as, RID_PRED0, k >= 0 ? 0 : 1);
-    emit_alopf7_rr(as, 0, E2K_CMPLSB, dest, left, RID_PRED0, &as->mcp);
-    emit_alopf1_ri(as, 0, E2K_ADDS, left, k, dest, &as->mcp);
+    emit_alopf7_rr(as, 0, E2K_CMPLSB, dest, left, RID_PRED0);
+    emit_alopf1_ri(as, 0, E2K_ADDS, left, k, dest);
   } else {
     /* ((dest^left) & (dest^(~)right)) < 0 */
     right = ra_alloc1(as, ir->op2, rset_clear(allow, left));
     tmp1 = ra_scratch(as, rset_clear(allow, right));
     tmp2 = ra_scratch(as, rset_clear(allow, tmp1));
     asm_guard(as, RID_PRED0, 0);
-    emit_alopf7_ri(as, 0, E2K_CMPLSB, tmp1, 0, RID_PRED0, &as->mcp);
-    emit_alopf1_rr(as, 0, E2K_ANDS, tmp1, tmp2, tmp1, &as->mcp);
-    emit_alopf1_rr(as, 0, E2K_XORS, dest, left, tmp1, 0);
+    emit_alopf7_ri(as, 0, E2K_CMPLSB, tmp1, 0, RID_PRED0);
+    emit_alopf1_rr(as, 0, E2K_ANDS, tmp1, tmp2, tmp1);
+    emit_alopf1_rr(as, 0, E2K_XORS, dest, left, tmp1);
     emit_alopf1_rr(as, 0, ir->o == IR_ADDOV ? E2K_XORS : E2K_XORNS,
-                   dest, right, tmp2, &as->mcp);
+                   dest, right, tmp2);
     emit_alopf1_rr(as, 0, ir->o == IR_ADDOV ? E2K_ADDS : E2K_SUBS,
-                   left, right, dest, &as->mcp);
+                   left, right, dest);
   }
 }
 
@@ -1121,13 +1116,13 @@ static void asm_fpmath(ASMState *as, IRIns *ir)
   if (fpm == IRFPM_SQRT) {
     Reg dest = ra_dest(as, ir, RSET_GPR);
     Reg left = ra_alloc1(as, ir->op1, rset_exclude(RSET_GPR, dest));
-    emit_alopf11_rr(as, 0, E2K_FSQRTTD, left, dest, dest, &as->mcp);
-    emit_alopf12_r(as, 0, E2K_FSQRTID, left, dest, &as->mcp);
+    emit_alopf11_rr(as, 0, E2K_FSQRTTD, left, dest, dest);
+    emit_alopf12_r(as, 0, E2K_FSQRTID, left, dest);
   /* floor(0x1), ceil(0x2), trunc(0x3) */
   } else if (fpm <= IRFPM_TRUNC) {
     Reg dest = ra_dest(as, ir, RSET_GPR);
     Reg left = ra_hintalloc(as, ir->op1, dest, RSET_GPR);
-    emit_alopf11_ir(as, 0, E2K_FDTOIFD, fpm+1, left, dest, &as->mcp);
+    emit_alopf11_ir(as, 0, E2K_FDTOIFD, fpm+1, left, dest);
   } else {
     asm_callid(as, ir, IRCALL_lj_vm_floor + fpm);
   }
@@ -1138,7 +1133,7 @@ static void asm_bnot(ASMState *as, IRIns *ir)
   Reg dest = ra_dest(as, ir, RSET_GPR);
   Reg left = ra_hintalloc(as, ir->op1, dest, RSET_GPR);
   emit_alopf1_ri(as, 0, irt_is64(ir->t) ? E2K_XORD : E2K_XORS,
-                 left, -1, dest, &as->mcp);
+                 left, -1, dest);
 }
 
 static void asm_bswap(ASMState *as, IRIns *ir)
@@ -1147,12 +1142,12 @@ static void asm_bswap(ASMState *as, IRIns *ir)
   Reg left = ra_alloc1(as, ir->op1, RSET_GPR);
   Reg smask = ra_scratch(as, rset_exclude(RSET_GPR, left));
   if (irt_is64(ir->t)) {
-    emit_alopf21_rrr(as, 0, E2K_PSHUFB, left, left, smask, dest, &as->mcp);
-    emit_alopf1_ii(as, 0, E2K_ADDD, 0, 0x1020304050607, smask, &as->mcp);
+    emit_alopf21_rrr(as, 0, E2K_PSHUFB, left, left, smask, dest);
+    emit_alopf1_ii(as, 0, E2K_ADDD, 0, 0x1020304050607, smask);
   } else {
-    emit_alopf21_rrr(as, 0, E2K_PSHUFB, left, left, smask, dest, &as->mcp);
-    emit_alopf1_ii(as, 0, E2K_ADDD, 0, 0x8080808000010203, smask, 0);
-    emit_alopf1_ir(as, 0, E2K_SXT, SXT_WZ, left, left, &as->mcp);
+    emit_alopf21_rrr(as, 0, E2K_PSHUFB, left, left, smask, dest);
+    emit_alopf1_ii(as, 0, E2K_ADDD, 0, 0x8080808000010203, smask);
+    emit_alopf1_ir(as, 0, E2K_SXT, SXT_WZ, left, left);
   }
 }
 
@@ -1166,10 +1161,10 @@ static void asm_mul(ASMState *as, IRIns *ir)
     Reg right = RID_NONE, left = ra_hintalloc(as, ir->op1, dest, RSET_GPR);
     uint32_t op = irt_is64(ir->t) ? E2K_MULD : E2K_MULS;
     if (irref_isk(ir->op2)) {
-      emit_alopf11_ri(as, 0, op, left, get_kval(as, ir->op2), dest, &as->mcp);
+      emit_alopf11_ri(as, 0, op, left, get_kval(as, ir->op2), dest);
     } else {
       right = ra_alloc1(as, ir->op2, rset_exclude(RSET_GPR, left));
-      emit_alopf11_rr(as, 0, op, left, right, dest, &as->mcp);
+      emit_alopf11_rr(as, 0, op, left, right, dest);
     }
   }
 }
@@ -1179,7 +1174,7 @@ static void asm_fpdiv(ASMState *as, IRIns *ir)
   Reg dest = ra_dest(as, ir, RSET_GPR);
   Reg left = ra_alloc1(as, ir->op1, RSET_GPR);
   Reg right = ra_alloc1(as, ir->op2, rset_exclude(RSET_GPR, left));
-  emit_alopf11_rr(as, 0, E2K_FDIVD, left, right, dest, &as->mcp);
+  emit_alopf11_rr(as, 0, E2K_FDIVD, left, right, dest);
 }
 
 static void asm_neg(ASMState *as, IRIns *ir)
@@ -1187,10 +1182,10 @@ static void asm_neg(ASMState *as, IRIns *ir)
   Reg dest = ra_dest(as, ir, RSET_GPR);
   Reg left = ra_hintalloc(as, ir->op1, dest, RSET_GPR);
   if (irt_isnum(ir->t)) {
-    emit_alopf1_ri(as, 0, E2K_XORD, left, 0x8000000000000000, dest, &as->mcp);
+    emit_alopf1_ri(as, 0, E2K_XORD, left, 0x8000000000000000, dest);
   } else {
     emit_alopf1_ir(as, 0, irt_is64(ir->t) ? E2K_SUBD : E2K_SUBS,
-                   0, left, dest, &as->mcp);
+                   0, left, dest);
   }
 }
 
@@ -1198,7 +1193,7 @@ static void asm_abs(ASMState *as, IRIns *ir)
 {
   Reg dest = ra_dest(as, ir, RSET_GPR);
   Reg left = ra_hintalloc(as, ir->op1, dest, RSET_GPR);;
-  emit_alopf1_ri(as, 0, E2K_ANDD, left, 0x7fffffffffffffff, dest, &as->mcp);
+  emit_alopf1_ri(as, 0, E2K_ANDD, left, 0x7fffffffffffffff, dest);
 }
 
 static void asm_min_max(ASMState *as, IRIns *ir, int ismax)
@@ -1213,10 +1208,9 @@ static void asm_min_max(ASMState *as, IRIns *ir, int ismax)
     if (left == right) {
       if (dest != left) emit_movrr(as, 0, dest, left);
     } else {
-      emit_mrgc(as, emit_alopf1_rr(as, 1, E2K_MERGES, left, right, dest, 0),
-                RID_PRED0, ismax ? 0 : 1, &as->mcp);
-      emit_nop(as, 2);
-      emit_alopf7_rr(as, 0, E2K_CMPLSB, left, right, RID_PRED0, &as->mcp);
+      emit_alopf1_rr_mrgc(as, 1, E2K_MERGES, left, right, dest,
+                          RID_PRED0, ismax ? 0 : 1);
+      emit_alopf7_rr(as, 0, E2K_CMPLSB, left, right, RID_PRED0);
     }
   }
 }
@@ -1231,9 +1225,9 @@ static void asm_mulov(ASMState *as, IRIns *ir)
   Reg right = ra_alloc1(as, ir->op2, rset_exclude(RSET_GPR, left));
   Reg tmp = ra_scratch(as, rset_exclude(RSET_GPR, dest));
   asm_guard(as, RID_PRED0, 1);
-  emit_alopf7_rr(as, 0, E2K_CMPEDB, tmp, dest, RID_PRED0, &as->mcp);
-  emit_alopf1_ir(as, 0, E2K_SXT, SXT_WS, dest, tmp, &as->mcp);
-  emit_alopf11_rr(as, 0, E2K_SMULX, left, right, dest, &as->mcp);
+  emit_alopf7_rr(as, 0, E2K_CMPEDB, tmp, dest, RID_PRED0);
+  emit_alopf1_ir(as, 0, E2K_SXT, SXT_WS, dest, tmp);
+  emit_alopf11_rr(as, 0, E2K_SMULX, left, right, dest);
 }
 
 #define asm_addov(as, ir) asm_arithov(as, ir)
@@ -1307,10 +1301,10 @@ static void asm_comp(ASMState *as, IRIns *ir)
 
   if (irref_isk(rref)) {
     intptr_t k = get_kval(as, rref);
-    emit_alopf7_ri(as, 0, op, left, k, RID_PRED0, &as->mcp);
+    emit_alopf7_ri(as, 0, op, left, k, RID_PRED0);
   } else {
     Reg right = ra_alloc1(as, rref, rset_exclude(RSET_GPR, left));
-    emit_alopf7_rr(as, 0, op, left, right, RID_PRED0, &as->mcp);
+    emit_alopf7_rr(as, 0, op, left, right, RID_PRED0);
   }
 }
 
@@ -1341,9 +1335,9 @@ static void asm_prof(ASMState *as, IRIns *ir)
   UNUSED(ir);
   Reg tmp = ra_scratch(as, RSET_GPR);
   asm_guard(as, RID_PRED0, 1);
-  emit_alopf7_ri(as, 0, E2K_CMPANDESB, tmp, HOOK_PROFILE, RID_PRED0, &as->mcp);
+  emit_alopf7_ri(as, 0, E2K_CMPANDESB, tmp, HOOK_PROFILE, RID_PRED0);
   emit_alopf1_ri(as, 0, E2K_LDB, RID_DISPATCH,
-                 dispofs(as, &J2G(as->J)->hookmask), tmp, &as->mcp);
+                 dispofs(as, &J2G(as->J)->hookmask), tmp);
 }
 
 /* -- Stack handling ------------------------------------------------------ */
@@ -1361,11 +1355,11 @@ static void asm_stack_check(ASMState *as, BCReg topslot,
   asm_guard(as, RID_PRED0, 0);
   as->snapno = oldsnap;
   emit_alopf7_ri(as, 0, E2K_CMPBDB, tmp, (intptr_t)(8*topslot),
-                 RID_PRED0, &as->mcp);
+                 RID_PRED0);
   if (allow != RSET_EMPTY) ra_modified(as, tmp);
-  emit_alopf1_rr(as, 0, E2K_SUBD, tmp, pbase, tmp, &as->mcp);
+  emit_alopf1_rr(as, 0, E2K_SUBD, tmp, pbase, tmp);
   emit_alopf1_ri(as, 0, E2K_LDD, tmp, (intptr_t)offsetof(lua_State, maxstack),
-                 tmp, &as->mcp);
+                 tmp);
   if (pbase == RID_TMP2)
     emit_getgl(as, RID_TMP2, jit_base);
   emit_getgl(as, tmp, cur_L);
@@ -1391,17 +1385,17 @@ static void asm_stack_restore(ASMState *as, SnapShot *snap)
       if (irref_isk(ref)) {
         kki = kki | (int64_t)(uint32_t)ir->i;
         Reg rki = ra_allock(as, kki, allow);
-        emit_alopf3_ri(as, 0, E2K_STD, RID_BASE, ofs, rki, &as->mcp);
+        emit_alopf3_ri(as, 0, E2K_STD, RID_BASE, ofs, rki);
       } else {
         Reg src = ra_alloc1(as, ref, allow);
         allow = rset_exclude(allow, src);
         Reg tmp = ra_scratch(as, allow);
-        emit_alopf3_ri(as, 0, E2K_STD, RID_BASE, ofs, tmp, &as->mcp);
-        emit_alopf1_ri(as, 0, E2K_ADDD, src, kki, tmp, &as->mcp);
+        emit_alopf3_ri(as, 0, E2K_STD, RID_BASE, ofs, tmp);
+        emit_alopf1_ri(as, 0, E2K_ADDD, src, kki, tmp);
       }
     } else if (irt_isnum(ir->t)) {
       Reg src = ra_alloc1(as, ref, allow);
-      emit_alopf3_ri(as, 0, E2K_STD, RID_BASE, ofs, src, &as->mcp);
+      emit_alopf3_ri(as, 0, E2K_STD, RID_BASE, ofs, src);
     } else {
       lj_assertA(irt_ispri(ir->t) || irt_isaddr(ir->t) || irt_isinteger(ir->t),
                  "store of IR type %d", irt_type(ir->t));
@@ -1409,18 +1403,18 @@ static void asm_stack_restore(ASMState *as, SnapShot *snap)
         TValue k;
         lj_ir_kvalue(as->J->L, &k, ir);
         Reg rki = ra_allock(as, (int64_t)k.u64, allow);
-        emit_alopf3_ri(as, 0, E2K_STD, RID_BASE, ofs, rki, &as->mcp);
+        emit_alopf3_ri(as, 0, E2K_STD, RID_BASE, ofs, rki);
       } else {
         Reg src = ra_alloc1(as, ref, allow);
         allow = rset_exclude(allow, src);
         int64_t type = (int64_t)irt_toitype(ir->t) << 47;
         Reg tmp = ra_scratch(as, allow);
-        emit_alopf3_ri(as, 0, E2K_STD, RID_BASE, ofs, tmp, &as->mcp);
+        emit_alopf3_ri(as, 0, E2K_STD, RID_BASE, ofs, tmp);
         if (irt_isinteger(ir->t)) {
-          emit_alopf1_ri(as, 0, E2K_ADDD, tmp, type, tmp, &as->mcp);
-          emit_alopf1_ir(as, 0, E2K_SXT, SXT_WZ, src, tmp, &as->mcp);
+          emit_alopf1_ri(as, 0, E2K_ADDD, tmp, type, tmp);
+          emit_alopf1_ir(as, 0, E2K_SXT, SXT_WZ, src, tmp);
         } else {
-          emit_alopf1_ri(as, 0, E2K_ADDD, src, type, tmp, &as->mcp);
+          emit_alopf1_ri(as, 0, E2K_ADDD, src, type, tmp);
         }
       }
     }
@@ -1442,17 +1436,17 @@ static void asm_gc_check(ASMState *as)
   /* Exit trace if in GCSatomic or GCSfinalize. Avoids syncing GC objects. */
   /* Assumes asm_snap_prep() already done. */
   asm_guard_gc(as, RID_PRED0, 1);
-  emit_alopf7_ri(as, 0, E2K_CMPEDB, RID_RET, 0, RID_PRED0, &as->mcp);
+  emit_alopf7_ri(as, 0, E2K_CMPEDB, RID_RET, 0, RID_PRED0);
   args[0] = ASMREF_TMP1;  /* global_State *g */
   args[1] = ASMREF_TMP2;  /* MSize steps     */
   asm_gencall(as, ci, args);
   tmp1 = ra_releasetmp(as, ASMREF_TMP1);
-  emit_alopf1_ri(as, 0, E2K_ADDD, RID_DISPATCH, GG_DISP2G, tmp1, &as->mcp);
+  emit_alopf1_ri(as, 0, E2K_ADDD, RID_DISPATCH, GG_DISP2G, tmp1);
   tmp2 = ra_releasetmp(as, ASMREF_TMP2);
   emit_loadi(as, tmp2, as->gcsteps);
   /* Jump around GC step if GC total < GC threshold. */
-  emit_ibranch(as, l_end, RID_PRED0, 0, &as->mcp);
-  emit_alopf7_rr(as, 0, E2K_CMPBDB, tmp1, tmp2, RID_PRED0, &as->mcp);
+  emit_ibranch(as, l_end, RID_PRED0, 0);
+  emit_alopf7_rr(as, 0, E2K_CMPBDB, tmp1, tmp2, RID_PRED0);
   emit_getgl(as, tmp1, gc.total);
   emit_getgl(as, tmp2, gc.threshold);
   as->gcsteps = 0;
@@ -1489,7 +1483,11 @@ static MCode *e2k_lookup_ibranch(MCode *p) {
 static void asm_loop_fixup(ASMState *as)
 {
   MCode *p = as->mctop;
-  MCode *target = as->mcp;
+  MCode *target;
+
+  emit_serialize(as);
+
+  target = as->mcp;
   p[-4] = E2K_NOP(4, 0);
   p[-3] = E2K_NOP_LOOP_PATCH;
   p[-2] = 0;
@@ -1503,7 +1501,7 @@ static void asm_loop_fixup(ASMState *as)
     *cs0 &= 0xf0000000;
     *cs0 |= E2KF_DISP(target - p + 8);
   } else { /* 4(HS+SS+CS0+Align) */
-    emit_ibranch(as, target, 0, 0, &p);
+    bundle_ibranch(as, target, 0, 0, &p);
   }
 }
 
@@ -1527,9 +1525,11 @@ static void asm_head_root_base(ASMState *as)
       emit_movrr(as, 0, r, RID_BASE);
   }
 
+  emit_serialize(as);
+
   /* setup jit window */
-  emit_window(as, JIT_WSZ, JIT_NFX, JIT_DBL,
-              JIT_RSZ, JIT_RBS, JIT_RCUR, &as->mcp);
+  bundle_window(as, JIT_WSZ, JIT_NFX, JIT_DBL,
+                JIT_RSZ, JIT_RBS, JIT_RCUR, &as->mcp);
 }
 
 /* Coalesce BASE register for a side trace. */
@@ -1562,21 +1562,24 @@ static void asm_tail_fixup(ASMState *as, TraceNo lnk)
   MCode *target = lnk ? traceref(as->J, lnk)->mcode : (MCode *)lj_vm_exit_interp;
   MCode *p = as->mctop;
   int32_t spadj = as->T->spadjust;
+
+  emit_serialize(as);
+
   if (spadj) {
     p[-2] = E2K_NOP(2, 0);
     p[-1] = 0;
     p -= 2; /* skip nops */
-    emit_bundle_len(as, 6);
-    emit_ibranch(as, target, 0, 0, 0);
-    emit_alopf12_i(as, 0, E2K_GETSP, spadj, RID_SP, &p);
+    bundle_len(as, 6);
+    bundle_ibranch(as, target, 0, 0, 0);
+    bundle_alopf12_i(as, 0, E2K_GETSP, spadj, RID_SP, &p);
   } else {
     p[-4] = E2K_NOP(4, 0);
     p[-3] = 0;
     p[-2] = 0;
     p[-1] = 0;
     p -= 4; /* skip nops */
-    emit_bundle_len(as, 4);
-    emit_ibranch(as, target, 0, 0, &p);
+    bundle_len(as, 4);
+    bundle_ibranch(as, target, 0, 0, &p);
   }
 }
 
@@ -1609,7 +1612,8 @@ static Reg asm_setup_call_slots(ASMState *as, IRIns *ir, const CCallInfo *ci)
 /* Target-specific setup. */
 static void asm_setup_target(ASMState *as)
 {
-  emit_bundle_reset(&as->bundle);
+  bundle_reset(&as->bundle);
+  sched_reset(as);
   asm_exitstub_setup(as);
 }
 

@@ -383,6 +383,13 @@ typedef enum {
   E2K_REG_RARG =  0x2000
 } E2kOpT;
 
+/* -- Scheduler ----------------------------------------------------------- */
+
+typedef struct E2kSched {
+  /* TODO: e2k scheduler */
+  int empty;
+} E2kSched;
+
 /* -- Opcodes ------------------------------------------------------------- */
 
 #define E2K_DISP    0x0

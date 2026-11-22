@@ -55,6 +55,7 @@ typedef struct ASMState {
 #endif
 
 #if LJ_TARGET_E2K
+  E2kSched sched; /* Scheduler for E2K. */
   E2kBundle bundle; /* E2k bundle descripter */
 #endif
 
@@ -1701,6 +1702,9 @@ static void asm_loop(ASMState *as)
   as->sectref = 0;
   if (!neverfuse(as)) as->fuseref = 0;
   asm_phi_shuffle(as);
+#if LJ_TARGET_E2K
+  emit_serialize(as);
+#endif
   mcspill = as->mcp;
   asm_phi_copyspill(as);
   asm_loop_fixup(as);

@@ -87,14 +87,14 @@ static E2kOpT get_const_type(intptr_t val)
 
 /* -- Bundling ------------------------------------------------------------ */
 
-static void emit_bundle_reset(E2kBundle *bundle)
+static void bundle_reset(E2kBundle *bundle)
 {
   memset(bundle, 0, sizeof(E2kBundle));
   bundle->res = RES_INIT;
   bundle->f1 = 1; /* HS itself */
 }
 
-static MCode *emit_bundle_pack(ASMState *as, MCode *mxp)
+static MCode *bundle_pack(ASMState *as, MCode *mxp)
 {
   uint32_t hs_x_s_sw = (as->bundle.res & RES_SS) ? 0 : 0x2;
   uint32_t hs_c = (~as->bundle.res & RES_CS_ALL) >> RES_CS_OFFSET;
@@ -192,17 +192,17 @@ static MCode *emit_bundle_pack(ASMState *as, MCode *mxp)
   return mxp;
 }
 
-static void emit_bundle_finalize(ASMState *as, MCode **mxp)
+static void bundle_finalize(ASMState *as, MCode **mxp)
 {
   if (mxp) {
-    *mxp = emit_bundle_pack(as, *mxp);
-    emit_bundle_reset(&as->bundle);
+    *mxp = bundle_pack(as, *mxp);
+    bundle_reset(&as->bundle);
   }
 }
 
-/* -- Emit basic instructions --------------------------------------------- */
+/* -- Bundle basic instructions ------------------------------------------- */
 
-static uint32_t emit_lts(ASMState *as, uint64_t mask, E2kOpT type, uint64_t val)
+static uint32_t bundle_lts(ASMState *as, uint64_t mask, E2kOpT type, uint64_t val)
 {
   /* 16-bit halfsyls not managed yet, using lo part only */
   uint64_t lts = 0;
@@ -236,7 +236,7 @@ static uint32_t emit_lts(ASMState *as, uint64_t mask, E2kOpT type, uint64_t val)
   return lts_idx;
 }
 
-static uint32_t emit_src1(ASMState *as, E2kOpT type, intptr_t src1)
+static uint32_t bundle_src1(ASMState *as, E2kOpT type, intptr_t src1)
 {
   UNUSED(as);
   if (type == E2K_REG) {
@@ -262,7 +262,7 @@ static uint32_t emit_src1(ASMState *as, E2kOpT type, intptr_t src1)
   }
 }
 
-static uint32_t emit_src2(ASMState *as, E2kOpT type, intptr_t src2)
+static uint32_t bundle_src2(ASMState *as, E2kOpT type, intptr_t src2)
 {
   if (type == E2K_REG) {
     switch (get_reg_type(as, src2)) {
@@ -281,11 +281,11 @@ static uint32_t emit_src2(ASMState *as, E2kOpT type, intptr_t src2)
     case E2K_CONST4:
       return src2 | 0xc0;
     case E2K_CONST5: case E2K_CONST16:
-      return (emit_lts(as, RES_LTS_ALL, E2K_CONST16, src2) | 0xd0);
+      return (bundle_lts(as, RES_LTS_ALL, E2K_CONST16, src2) | 0xd0);
     case E2K_CONST32:
-      return (emit_lts(as, RES_LTS_ALL, E2K_CONST32, src2) | 0xd8);
+      return (bundle_lts(as, RES_LTS_ALL, E2K_CONST32, src2) | 0xd8);
     case E2K_CONST64:
-      return (emit_lts(as, RES_LTS_ALL, E2K_CONST64, src2) | 0xdc);
+      return (bundle_lts(as, RES_LTS_ALL, E2K_CONST64, src2) | 0xdc);
     default:
       lj_assertA(0, "bad type for src2 (%d)", type);
       return 0;
@@ -293,7 +293,7 @@ static uint32_t emit_src2(ASMState *as, E2kOpT type, intptr_t src2)
   }
 }
 
-static uint32_t emit_src3(ASMState *as, E2kOpT type, intptr_t src3)
+static uint32_t bundle_src3(ASMState *as, E2kOpT type, intptr_t src3)
 {
   UNUSED(as);
   if (type == E2K_REG) {
@@ -312,7 +312,7 @@ static uint32_t emit_src3(ASMState *as, E2kOpT type, intptr_t src3)
   }
 }
 
-static uint32_t emit_dst(ASMState *as, E2kOpT type, intptr_t dst)
+static uint32_t bundle_dst(ASMState *as, E2kOpT type, intptr_t dst)
 {
   UNUSED(as);
   if (type == E2K_REG) {
@@ -333,7 +333,7 @@ static uint32_t emit_dst(ASMState *as, E2kOpT type, intptr_t dst)
   }
 }
 
-static uint32_t emit_pdst(ASMState *as, E2kOpT type, intptr_t pred)
+static uint32_t bundle_pdst(ASMState *as, E2kOpT type, intptr_t pred)
 {
   UNUSED(as);
   if (type == E2K_REG_PRED) {
@@ -344,8 +344,8 @@ static uint32_t emit_pdst(ASMState *as, E2kOpT type, intptr_t pred)
   }
 }
 
-static int emit_als(ASMState *as, E2kBundle *bundle, E2kResourceMask mask,
-                    uint32_t als)
+static int bundle_als(ASMState *as, E2kBundle *bundle, E2kResourceMask mask,
+                      uint32_t als)
 {
   int als_idx = alloc_syllable(as, bundle, mask, RES_ALS_OFFSET);
   bundle->als[als_idx] = als;
@@ -353,8 +353,8 @@ static int emit_als(ASMState *as, E2kBundle *bundle, E2kResourceMask mask,
   return als_idx;
 }
 
-static void emit_ales(ASMState *as, E2kBundle *bundle, int als_idx,
-                      uint16_t ales)
+static void bundle_ales(ASMState *as, E2kBundle *bundle, int als_idx,
+                        uint16_t ales)
 {
   uint8_t mask = 1 << als_idx;
   lj_assertA(mask & ~bundle->hs_ales, "ALES is not available");
@@ -364,8 +364,8 @@ static void emit_ales(ASMState *as, E2kBundle *bundle, int als_idx,
     bundle->f3++;
 }
 
-static int emit_alopf7(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
-                       uint32_t src1, uint32_t src2, uint32_t pred)
+static int bundle_alopf7(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
+                         uint32_t src1, uint32_t src2, uint32_t pred)
 {
   int als_idx;
   E2kAlopf7 syl = { 0 };
@@ -375,13 +375,13 @@ static int emit_alopf7(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
   syl.fields.src1 = src1;
   syl.fields.cop = e2kop[op].opc;
   syl.fields.spec = spec;
-  als_idx = emit_als(as, &as->bundle, e2kop[op].mask, syl.i);
-  emit_bundle_finalize(as, p);
+  als_idx = bundle_als(as, &as->bundle, e2kop[op].mask, syl.i);
+  bundle_finalize(as, p);
   return als_idx;
 }
 
-static int emit_alopf3(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
-                        uint64_t src1, uint32_t src2, uint32_t src3)
+static int bundle_alopf3(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
+                         uint64_t src1, uint32_t src2, uint32_t src3)
 {
   int als_idx;
   E2kAlopf3 syl = { 0 };
@@ -390,13 +390,13 @@ static int emit_alopf3(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
   syl.fields.src1 = src1;
   syl.fields.cop = e2kop[op].opc;
   syl.fields.spec = spec;
-  als_idx = emit_als(as, &as->bundle, e2kop[op].mask, syl.i);
-  emit_bundle_finalize(as, p);
+  als_idx = bundle_als(as, &as->bundle, e2kop[op].mask, syl.i);
+  bundle_finalize(as, p);
   return als_idx;
 }
 
-static int emit_alopf2(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
-                       uint32_t src2, uint32_t dst)
+static int bundle_alopf2(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
+                         uint32_t src2, uint32_t dst)
 {
   int als_idx;
   E2kAlopf2 syl = { 0 };
@@ -405,13 +405,13 @@ static int emit_alopf2(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
   syl.fields.opce = e2kop[op].opce;
   syl.fields.cop = e2kop[op].opc;
   syl.fields.spec = spec;
-  als_idx = emit_als(as, &as->bundle, e2kop[op].mask, syl.i);
-  emit_bundle_finalize(as, p);
+  als_idx = bundle_als(as, &as->bundle, e2kop[op].mask, syl.i);
+  bundle_finalize(as, p);
   return als_idx;
 }
 
-static int emit_alopf1(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
-                        uint32_t src1, uint32_t src2, uint32_t dst)
+static int bundle_alopf1(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
+                         uint32_t src1, uint32_t src2, uint32_t dst)
 {
   int als_idx;
   E2kAlopf1 syl = { 0 };
@@ -420,55 +420,57 @@ static int emit_alopf1(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
   syl.fields.src1 = src1;
   syl.fields.cop = e2kop[op].opc;
   syl.fields.spec = spec;
-  als_idx = emit_als(as, &as->bundle, e2kop[op].mask, syl.i);
-  emit_bundle_finalize(as, p);
+  als_idx = bundle_als(as, &as->bundle, e2kop[op].mask, syl.i);
+  bundle_finalize(as, p);
   return als_idx;
 }
 
-static void emit_alef2(ASMState *as, uint32_t op, int als_idx)
+static void bundle_alef2(ASMState *as, uint32_t op, int als_idx)
 {
   E2kAlef2 syl = { 0 };
   syl.fields.opce2 = e2kop[op].opce2;
   syl.fields.opc2 = e2kop[op].opc2;
-  emit_ales(as, &as->bundle, als_idx, syl.i);
+  bundle_ales(as, &as->bundle, als_idx, syl.i);
 }
 
-static void emit_alef1(ASMState *as, uint32_t op, uint32_t src3, int als_idx)
+static void bundle_alef1(ASMState *as, uint32_t op, uint32_t src3, int als_idx)
 {
   E2kAlef1 syl = { 0 };
   syl.fields.src3 = src3;
   syl.fields.opc2 = e2kop[op].opc2;
-  emit_ales(as, &as->bundle, als_idx, syl.i);
+  bundle_ales(as, &as->bundle, als_idx, syl.i);
 }
 
-static int emit_alopf12(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
-                        uint32_t src2, uint32_t dst)
+static int bundle_alopf12(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
+                          uint32_t src2, uint32_t dst)
 {
-  int als_idx = emit_alopf2(as, 0, spec, op, src2, dst);
-  emit_alef2(as, op, als_idx);
-  emit_bundle_finalize(as, p);
+  int als_idx = bundle_alopf2(as, 0, spec, op, src2, dst);
+  bundle_alef2(as, op, als_idx);
+  bundle_finalize(as, p);
   return als_idx;
 }
 
-static int emit_alopf21(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
-                        uint32_t src1, uint32_t src2, uint32_t src3, uint32_t dst)
+static int bundle_alopf21(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
+                          uint32_t src1, uint32_t src2, uint32_t src3,
+                          uint32_t dst)
 {
-  int als_idx = emit_alopf1(as, 0, spec, op, src1, src2, dst);
-  emit_alef1(as, op, src3, als_idx);
-  emit_bundle_finalize(as, p);
+  int als_idx = bundle_alopf1(as, 0, spec, op, src1, src2, dst);
+  bundle_alef1(as, op, src3, als_idx);
+  bundle_finalize(as, p);
   return als_idx;
 }
 
-static int emit_alopf11(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
-                        uint32_t src1, uint32_t src2, uint32_t dst)
+static int bundle_alopf11(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
+                          uint32_t src1, uint32_t src2, uint32_t dst)
 {
-  int als_idx = emit_alopf1(as, 0, spec, op, src1, src2, dst);
-  emit_alef2(as, op, als_idx);
-  emit_bundle_finalize(as, p);
+  int als_idx = bundle_alopf1(as, 0, spec, op, src1, src2, dst);
+  bundle_alef2(as, op, als_idx);
+  bundle_finalize(as, p);
   return als_idx;
 }
 
-static void emit_cds(ASMState *as, int opc, int als, Reg pred, int inverted, MCode **p)
+static void bundle_cds(ASMState *as, int opc, int als, Reg pred, int inverted,
+                       MCode **p)
 {
   int cds_idx = alloc_syllable(as, &as->bundle, RES_CDS_ALL, RES_CDS_OFFSET);
   E2kCDS syl;
@@ -492,113 +494,63 @@ static void emit_cds(ASMState *as, int opc, int als, Reg pred, int inverted, MCo
   syl.fields.opc = opc;
   as->bundle.cds[cds_idx] = (uint32_t)syl.i;
   as->bundle.hs_cds++;
-  emit_bundle_finalize(as, p);
+  bundle_finalize(as, p);
 }
 
-#define emit_rlp(as, als, pred, inv, p) \
-  emit_cds(as, 0, als, pred, inv, p)
-#define emit_mrgc(as, als, pred, inv, p) \
-  emit_cds(as, 2, als, pred, inv, p)
-#define ISRC1(src1) emit_src1(as, E2K_CONST, src1)
-#define RSRC1(src1) emit_src1(as, E2K_REG, src1)
-#define ISRC2(src2) emit_src2(as, E2K_CONST, src2)
-#define RSRC2(src2) emit_src2(as, E2K_REG, src2)
-#define RSRC3(src3) emit_src3(as, E2K_REG, src3)
-#define RDST(dst)  emit_dst(as, E2K_REG, dst)
-#define PDST(pred) emit_pdst(as, E2K_REG_PRED, pred)
-#define emit_alopf7_rr(as, spec, op, src1, src2, pred, p) \
-  emit_alopf7(as, p, spec, op, RSRC1(src1), RSRC2(src2), PDST(pred))
-#define emit_alopf7_ri(as, spec, op, src1, src2, pred, p) \
-  emit_alopf7(as, p, spec, op, RSRC1(src1), ISRC2(src2), PDST(pred))
-#define emit_alopf3_ri(as, spec, op, src1, src2, src3, p) \
-  emit_alopf3(as, p, spec, op, RSRC1(src1), ISRC2(src2), RSRC3(src3))
-#define emit_alopf12_i(as, spec, op, src2, dst, p) \
-  emit_alopf12(as, p, spec, op, ISRC2(src2), RDST(dst))
-#define emit_alopf12_r(as, spec, op, src2, dst, p) \
-  emit_alopf12(as, p, spec, op, RSRC2(src2), RDST(dst))
-#define emit_alopf2_i(as, spec, op, src2, dst, p) \
-  emit_alopf2(as, p, spec, op, ISRC2(src2), RDST(dst))
-#define emit_alopf2_r(as, spec, op, src2, dst, p) \
-  emit_alopf2(as, p, spec, op, RSRC2(src2), RDST(dst))
-#define emit_alopf21_rrr(as, spec, op, src1, src2, src3, dst, p) \
-  emit_alopf21(as, p, spec, op, RSRC1(src1), RSRC2(src2), RSRC3(src3), RDST(dst))
-#define emit_alopf11_rr(as, spec, op, src1, src2, dst, p) \
-  emit_alopf11(as, p, spec, op, RSRC1(src1), RSRC2(src2), RDST(dst))
-#define emit_alopf11_ir(as, spec, op, src1, src2, dst, p) \
-  emit_alopf11(as, p, spec, op, ISRC1(src1), RSRC2(src2), RDST(dst))
-#define emit_alopf11_ri(as, spec, op, src1, src2, dst, p) \
-  emit_alopf11(as, p, spec, op, RSRC1(src1), ISRC2(src2), RDST(dst))
-#define emit_alopf11_ii(as, spec, op, src1, src2, dst, p) \
-  emit_alopf11(as, p, spec, op, ISRC1(src1), ISRC2(src2), RDST(dst))
-#define emit_alopf1_rr(as, spec, op, src1, src2, dst, p) \
-  emit_alopf1(as, p, spec, op, RSRC1(src1), RSRC2(src2), RDST(dst))
-#define emit_alopf1_ir(as, spec, op, src1, src2, dst, p) \
-  emit_alopf1(as, p, spec, op, ISRC1(src1), RSRC2(src2), RDST(dst))
-#define emit_alopf1_ri(as, spec, op, src1, src2, dst, p) \
-  emit_alopf1(as, p, spec, op, RSRC1(src1), ISRC2(src2), RDST(dst))
-#define emit_alopf1_ii(as, spec, op, src1, src2, dst, p) \
-  emit_alopf1(as, p, spec, op, ISRC1(src1), ISRC2(src2), RDST(dst))
-#define emit_snapno(as, snapno, p) \
-  emit_alopf1_ii(as, 0, E2K_ADDD, (snapno) < 32 ? (snapno) : 31, \
+#define bundle_rlp(as, als, pred, inv, p) \
+  bundle_cds(as, 0, als, pred, inv, p)
+#define bundle_mrgc(as, als, pred, inv, p) \
+  bundle_cds(as, 2, als, pred, inv, p)
+#define ISRC1(src1) bundle_src1(as, E2K_CONST, src1)
+#define RSRC1(src1) bundle_src1(as, E2K_REG, src1)
+#define ISRC2(src2) bundle_src2(as, E2K_CONST, src2)
+#define RSRC2(src2) bundle_src2(as, E2K_REG, src2)
+#define RSRC3(src3) bundle_src3(as, E2K_REG, src3)
+#define RDST(dst)  bundle_dst(as, E2K_REG, dst)
+#define PDST(pred) bundle_pdst(as, E2K_REG_PRED, pred)
+#define bundle_alopf7_rr(as, spec, op, src1, src2, pred, p) \
+  bundle_alopf7(as, p, spec, op, RSRC1(src1), RSRC2(src2), PDST(pred))
+#define bundle_alopf7_ri(as, spec, op, src1, src2, pred, p) \
+  bundle_alopf7(as, p, spec, op, RSRC1(src1), ISRC2(src2), PDST(pred))
+#define bundle_alopf3_ri(as, spec, op, src1, src2, src3, p) \
+  bundle_alopf3(as, p, spec, op, RSRC1(src1), ISRC2(src2), RSRC3(src3))
+#define bundle_alopf12_i(as, spec, op, src2, dst, p) \
+  bundle_alopf12(as, p, spec, op, ISRC2(src2), RDST(dst))
+#define bundle_alopf12_r(as, spec, op, src2, dst, p) \
+  bundle_alopf12(as, p, spec, op, RSRC2(src2), RDST(dst))
+#define bundle_alopf2_i(as, spec, op, src2, dst, p) \
+  bundle_alopf2(as, p, spec, op, ISRC2(src2), RDST(dst))
+#define bundle_alopf2_r(as, spec, op, src2, dst, p) \
+  bundle_alopf2(as, p, spec, op, RSRC2(src2), RDST(dst))
+#define bundle_alopf21_rrr(as, spec, op, src1, src2, src3, dst, p) \
+  bundle_alopf21(as, p, spec, op, RSRC1(src1), RSRC2(src2), RSRC3(src3), RDST(dst))
+#define bundle_alopf11_rr(as, spec, op, src1, src2, dst, p) \
+  bundle_alopf11(as, p, spec, op, RSRC1(src1), RSRC2(src2), RDST(dst))
+#define bundle_alopf11_ir(as, spec, op, src1, src2, dst, p) \
+  bundle_alopf11(as, p, spec, op, ISRC1(src1), RSRC2(src2), RDST(dst))
+#define bundle_alopf11_ri(as, spec, op, src1, src2, dst, p) \
+  bundle_alopf11(as, p, spec, op, RSRC1(src1), ISRC2(src2), RDST(dst))
+#define bundle_alopf11_ii(as, spec, op, src1, src2, dst, p) \
+  bundle_alopf11(as, p, spec, op, ISRC1(src1), ISRC2(src2), RDST(dst))
+#define bundle_alopf1_rr(as, spec, op, src1, src2, dst, p) \
+  bundle_alopf1(as, p, spec, op, RSRC1(src1), RSRC2(src2), RDST(dst))
+#define bundle_alopf1_ir(as, spec, op, src1, src2, dst, p) \
+  bundle_alopf1(as, p, spec, op, ISRC1(src1), RSRC2(src2), RDST(dst))
+#define bundle_alopf1_ri(as, spec, op, src1, src2, dst, p) \
+  bundle_alopf1(as, p, spec, op, RSRC1(src1), ISRC2(src2), RDST(dst))
+#define bundle_alopf1_ii(as, spec, op, src1, src2, dst, p) \
+  bundle_alopf1(as, p, spec, op, ISRC1(src1), ISRC2(src2), RDST(dst))
+#define bundle_snapno(as, snapno, p) \
+  bundle_alopf1_ii(as, 0, E2K_ADDD, (snapno) < 32 ? (snapno) : 31, \
       (snapno) < 32 ? 0 : (snapno) - 31, RID_TMP, p);
-#define emit_nop(as, nops) \
+#define bundle_nop(as, nops) \
   as->bundle.nop = nops
-#define emit_bundle_len(as, len) \
+#define bundle_len(as, len) \
   (as)->bundle.lng = (len)
 
-/* -- Emit loads/stores --------------------------------------------------- */
+/* -- Bundle control-flow instructions ------------------------------------ */
 
-#define dispofs(as, k) \
-  ((intptr_t)((uintptr_t)(k) - (uintptr_t)J2GG(as->J)->dispatch))
-
-/* Prefer rematerialization of BASE/L from global_State over spills. */
-#define emit_canremat(ref)  ((ref) <= REF_BASE)
-
-/* Load a 64 bit constant into a GPR. */
-static void emit_loadu64(ASMState *as, Reg r, uint64_t u64)
-{
-  emit_alopf1_ii(as, 0, E2K_ADDD, 0, u64, r, &as->mcp);
-}
-
-static void emit_loadk64(ASMState *as, Reg r, IRIns *ir)
-{
-  const uint64_t *k = &ir_k64(ir)->u64;
-  emit_loadu64(as, r, *k);
-}
-
-static void emit_ldd(ASMState *as, Reg dest, void *addr)
-{
-  emit_alopf1_ri(as, 0, E2K_LDD, RID_DISPATCH,
-                 (intptr_t)dispofs(as, addr), dest, &as->mcp);
-}
-
-static void emit_std(ASMState *as, Reg src, void *addr)
-{
-  emit_alopf3_ri(as, 0, E2K_STD, RID_DISPATCH, (intptr_t)dispofs(as, addr),
-                 src, &as->mcp);
-}
-
-/* Load a constant address into a GPR. */
-#define emit_loada(as, r, addr)   emit_loadu64(as, (r), u64ptr((addr)))
-/* Load a 32 bit constant into a GPR. */
-#define emit_loadi(as, r, i)      emit_loadu64(as, (r), (intptr_t)i)
-
-/* Get/set global_State fields. */
-#define emit_getgl(as, r, field) emit_ldd(as, r, (void *)&J2G(as->J)->field)
-#define emit_setgl(as, r, field) emit_std(as, r, (void *)&J2G(as->J)->field)
-
-/* Trace number is determined from per-trace exit stubs. */
-#define emit_setvmstate(as, i) UNUSED(i)
-
-/* -- Emit control-flow instructions -------------------------------------- */
-
-/* Label for internal jumps. */
-typedef MCode *MCLabel;
-
-/* Return label pointing to current PC. */
-#define emit_label(as)    ((as)->mcp)
-
-static void emit_ct(ASMState *as, Reg ctpr, Reg pred, int inverted, MCode **p)
+static void bundle_ct(ASMState *as, Reg ctpr, Reg pred, int inverted, MCode **p)
 {
   alloc_resource(as, &as->bundle, RES_SS); /* Uses only part of RES_SS */
   E2kSS syl;
@@ -618,13 +570,13 @@ static void emit_ct(ASMState *as, Reg ctpr, Reg pred, int inverted, MCode **p)
 
   as->bundle.ss = syl.i;
   as->bundle.f1++;
-  emit_bundle_finalize(as, p);
+  bundle_finalize(as, p);
 }
 
-static void emit_call(ASMState *as, Reg ctpr, Reg pred,
-                      int inverted, int wbs, MCode **p)
+static void bundle_call(ASMState *as, Reg ctpr, Reg pred,
+                        int inverted, int wbs, MCode **p)
 {
-  emit_ct(as, ctpr, pred, inverted, 0);
+  bundle_ct(as, ctpr, pred, inverted, 0);
   alloc_resource(as, &as->bundle, RES_CS1);
   E2kC1f1 syl;
   syl.i = 0;
@@ -632,11 +584,11 @@ static void emit_call(ASMState *as, Reg ctpr, Reg pred,
   syl.fields.params = wbs;
   as->bundle.cs[1] = syl.i;
   as->bundle.f2++;
-  emit_bundle_finalize(as, p);
+  bundle_finalize(as, p);
 }
 
-static void emit_copf2(ASMState *as, uint32_t opc, Reg ctpr,
-                       uintptr_t disp, MCode **p)
+static void bundle_copf2(ASMState *as, uint32_t opc, Reg ctpr,
+                         uintptr_t disp, MCode **p)
 {
   alloc_resource(as, &as->bundle, RES_CS0);
   E2kC0f2 syl;
@@ -648,43 +600,38 @@ static void emit_copf2(ASMState *as, uint32_t opc, Reg ctpr,
 
   as->bundle.cs[0] = syl.i;
   as->bundle.f1++;
-  emit_bundle_finalize(as, p);
+  bundle_finalize(as, p);
 }
 
-static void emit_disp(ASMState *as, Reg ctpr, MCode *target, MCode **p)
+static void bundle_disp(ASMState *as, Reg ctpr, MCode *target, MCode **p)
 {
   as->bundle.cs0_target = target;
-  emit_copf2(as, E2K_DISP, ctpr, 0, p);
+  bundle_copf2(as, E2K_DISP, ctpr, 0, p);
 }
 
-static void emit_prepcall(ASMState *as, Reg ctpr,
-                          ASMFunction target, MCode **p)
+static void bundle_prepcall(ASMState *as, Reg ctpr,
+                            ASMFunction target, MCode **p)
 {
   ptrdiff_t delta = (MCode *) target - as->mcp;
   if (E2KF_S_OK(delta + 64, 29)) {
-    emit_disp(as, ctpr, (MCode *) target, p);
+    bundle_disp(as, ctpr, (MCode *) target, p);
   } else { /* Target out of range; need indirect call. */
-    emit_alopf2_i(as, 0, E2K_MOVTD, (intptr_t)target, ctpr, p);
+    bundle_alopf2_i(as, 0, E2K_MOVTD, (intptr_t)target, ctpr, p);
   }
 }
 
-static void emit_ibranch(ASMState *as, MCode *target, Reg pred,
-                         int inverted, MCode **p)
+static void bundle_ibranch(ASMState *as, MCode *target, Reg pred,
+                           int inverted, MCode **p)
 {
   as->bundle.cs0_target = target;
-  emit_ct(as, 0, pred, inverted, 0);
-  emit_copf2(as, E2K_IBRANCH, 0, 0, p);
+  bundle_ct(as, 0, pred, inverted, 0);
+  bundle_copf2(as, E2K_IBRANCH, 0, 0, p);
 }
 
-static void emit_jmp(ASMState *as, MCode *target)
-{
-  emit_ibranch(as, target, 0, 0, &as->mcp);
-}
-
-static void emit_setr(ASMState *as, MCode **p,
-                      int wsz, int nfx, int dbl,
-                      int rsz, int rbs, int rcur,
-                      int psz, int rpsz, int op)
+static void bundle_setr(ASMState *as, MCode **p,
+                        int wsz, int nfx, int dbl,
+                        int rsz, int rbs, int rcur,
+                        int psz, int rpsz, int op)
 {
     alloc_resource(as, &as->bundle, RES_CS1);
     E2kSetBR params;
@@ -711,48 +658,204 @@ static void emit_setr(ASMState *as, MCode **p,
         lts0.fields.wsz = wsz;
         lts0.fields.nfx = nfx;
         lts0.fields.dbl = dbl;
-        emit_lts(as, RES_LTS0, E2K_CONST32, lts0.i);
+        bundle_lts(as, RES_LTS0, E2K_CONST32, lts0.i);
     }
 
-    emit_bundle_finalize(as, p);
+    bundle_finalize(as, p);
 }
 
-#define emit_window(as, wsz, nfx, dbl, rsz, rbs, rcur, p) \
-  emit_setr(as, p, wsz, nfx, dbl, rsz, rbs, rcur, 0, 0, E2K_SETWD|E2K_SETBN)
+#define bundle_window(as, wsz, nfx, dbl, rsz, rbs, rcur, p) \
+  bundle_setr(as, p, wsz, nfx, dbl, rsz, rbs, rcur, 0, 0, E2K_SETWD|E2K_SETBN)
+
+/* -- Emit basic instructions --------------------------------------------- */
+
+static void sched_reset(ASMState *as)
+{
+  memset(&as->sched, 0, sizeof(as->sched));
+}
+
+static void emit_serialize(ASMState *as)
+{
+  /* TODO: */
+}
+
+#define emit_alopf7_rr(as, spec, op, src1, src2, pred) \
+  emit_serialize(as); \
+  bundle_alopf7_rr(as, spec, op, src1, src2, pred, &(as)->mcp)
+#define emit_alopf7_ri(as, spec, op, src1, src2, pred) \
+  emit_serialize(as); \
+  bundle_alopf7_ri(as, spec, op, src1, src2, pred, &(as)->mcp)
+#define emit_alopf3_ri(as, spec, op, src1, src2, src3) \
+  emit_serialize(as); \
+  bundle_alopf3_ri(as, spec, op, src1, src2, src3, &(as)->mcp)
+#define emit_alopf12_i(as, spec, op, src2, dst) \
+  emit_serialize(as); \
+  bundle_alopf12_i(as, spec, op, src2, dst, &(as)->mcp)
+#define emit_alopf12_r(as, spec, op, src2, dst) \
+  emit_serialize(as); \
+  bundle_alopf12_r(as, spec, op, src2, dst, &(as)->mcp)
+#define emit_alopf2_r_rlp(as, spec, op, src2, dst, pred, inv) \
+  emit_serialize(as); \
+  bundle_rlp(as, bundle_alopf2_r(as, spec, op, src2, dst, 0), \
+             pred, inv, &(as)->mcp)
+#define emit_alopf2_i(as, spec, op, src2, dst) \
+  emit_serialize(as); \
+  bundle_alopf2_i(as, spec, op, src2, dst, &(as)->mcp)
+#define emit_alopf2_r(as, spec, op, src2, dst) \
+  emit_serialize(as); \
+  bundle_alopf2_r(as, spec, op, src2, dst, &(as)->mcp)
+#define emit_alopf21_rrr(as, spec, op, src1, src2, src3, dst) \
+  emit_serialize(as); \
+  bundle_alopf21_rrr(as, spec, op, src1, src2, src3, dst, &(as)->mcp)
+#define emit_alopf11_rr(as, spec, op, src1, src2, dst) \
+  emit_serialize(as); \
+  bundle_alopf11_rr(as, spec, op, src1, src2, dst, &(as)->mcp)
+#define emit_alopf11_ir(as, spec, op, src1, src2, dst) \
+  emit_serialize(as); \
+  bundle_alopf11_ir(as, spec, op, src1, src2, dst, &(as)->mcp)
+#define emit_alopf11_ri(as, spec, op, src1, src2, dst) \
+  emit_serialize(as); \
+  bundle_alopf11_ri(as, spec, op, src1, src2, dst, &(as)->mcp)
+#define emit_alopf11_ii(as, spec, op, src1, src2, dst) \
+  emit_serialize(as); \
+  bundle_alopf11_ii(as, spec, op, src1, src2, dst, &(as)->mcp)
+#define emit_alopf1_rr(as, spec, op, src1, src2, dst) \
+  emit_serialize(as); \
+  bundle_alopf1_rr(as, spec, op, src1, src2, dst, &(as)->mcp)
+#define emit_alopf1_rr_mrgc(as, spec, op, src1, src2, dst, pred, inv) \
+  emit_serialize(as); \
+  bundle_mrgc(as, bundle_alopf1_rr(as, spec, op, src1, src2, dst, 0), \
+              pred, inv, &(as)->mcp)
+#define emit_alopf1_ri_rlp(as, spec, op, src1, src2, dst, pred, inv) \
+  emit_serialize(as); \
+  bundle_rlp(as, bundle_alopf1_ri(as, spec, op, src1, src2, dst, 0), \
+             pred, inv, &(as)->mcp)
+#define emit_alopf1_ir(as, spec, op, src1, src2, dst) \
+  emit_serialize(as); \
+  bundle_alopf1_ir(as, spec, op, src1, src2, dst, &(as)->mcp)
+#define emit_alopf1_ri(as, spec, op, src1, src2, dst) \
+  emit_serialize(as); \
+  bundle_alopf1_ri(as, spec, op, src1, src2, dst, &(as)->mcp)
+#define emit_alopf1_ii(as, spec, op, src1, src2, dst) \
+  emit_serialize(as); \
+  bundle_alopf1_ii(as, spec, op, src1, src2, dst, &(as)->mcp)
+#define emit_snapno(as, snapno) \
+  emit_serialize(as); \
+  bundle_snapno(as, snapno, &(as)->mcp)
+
+#define emit_disp(as, ctpr, target) \
+  emit_serialize(as); \
+  bundle_disp(as, ctpr, target, &(as)->mcp)
+
+#define emit_prepcall(as, ctpr, target) \
+  emit_serialize(as); \
+  bundle_prepcall(as, ctpr, target, &(as)->mcp)
+
+#define emit_ct(as, ctpr, pred, inverted) \
+  emit_serialize(as); \
+  bundle_ct(as, ctpr, pred, inverted, &(as)->mcp)
+
+#define emit_ibranch(as, target, pred, inverted) \
+  emit_serialize(as); \
+  bundle_ibranch(as, target, pred, inverted, &(as)->mcp)
+
+#define emit_call(as, ctpr, pred, inverted, wbs) \
+  emit_serialize(as); \
+  bundle_call(as, ctpr, pred, inverted, wbs, &(as)->mcp)
+
+/* -- Emit loads/stores --------------------------------------------------- */
+
+#define dispofs(as, k) \
+  ((intptr_t)((uintptr_t)(k) - (uintptr_t)J2GG(as->J)->dispatch))
+
+/* Prefer rematerialization of BASE/L from global_State over spills. */
+#define emit_canremat(ref)  ((ref) <= REF_BASE)
+
+/* Load a 64 bit constant into a GPR. */
+static void emit_loadu64(ASMState *as, Reg r, uint64_t u64)
+{
+  emit_alopf1_ii(as, 0, E2K_ADDD, 0, u64, r);
+}
+
+static void emit_loadk64(ASMState *as, Reg r, IRIns *ir)
+{
+  const uint64_t *k = &ir_k64(ir)->u64;
+  emit_loadu64(as, r, *k);
+}
+
+static void emit_ldd(ASMState *as, Reg dest, void *addr)
+{
+  emit_alopf1_ri(as, 0, E2K_LDD, RID_DISPATCH,
+                 (intptr_t)dispofs(as, addr), dest);
+}
+
+static void emit_std(ASMState *as, Reg src, void *addr)
+{
+  emit_alopf3_ri(as, 0, E2K_STD, RID_DISPATCH, (intptr_t)dispofs(as, addr),
+                 src);
+}
+
+/* Load a constant address into a GPR. */
+#define emit_loada(as, r, addr)   emit_loadu64(as, (r), u64ptr((addr)))
+/* Load a 32 bit constant into a GPR. */
+#define emit_loadi(as, r, i)      emit_loadu64(as, (r), (intptr_t)i)
+
+/* Get/set global_State fields. */
+#define emit_getgl(as, r, field) emit_ldd(as, r, (void *)&J2G(as->J)->field)
+#define emit_setgl(as, r, field) emit_std(as, r, (void *)&J2G(as->J)->field)
+
+/* Trace number is determined from per-trace exit stubs. */
+#define emit_setvmstate(as, i) UNUSED(i)
+
+/* -- Emit control-flow instructions -------------------------------------- */
+
+/* Label for internal jumps. */
+typedef MCode *MCLabel;
+
+/* Return label pointing to current PC. */
+static MCLabel emit_label(ASMState *as)
+{
+  emit_serialize(as);
+  return as->mcp;
+}
+
+static void emit_jmp(ASMState *as, MCode *target)
+{
+  emit_ibranch(as, target, 0, 0);
+}
 
 /* -- Emit generic operations --------------------------------------------- */
 
 /* argument extension */
 static void emit_ext(ASMState *as, Reg dst, Reg src, int ext) {
-  emit_alopf1_ir(as, 0, E2K_SXT, ext, src, dst, &as->mcp);
+  emit_alopf1_ir(as, 0, E2K_SXT, ext, src, dst);
 }
 
 /* Generic move between two regs. */
 static void emit_movrr(ASMState *as, IRIns *ir, Reg dst, Reg src)
 {
   UNUSED(ir);
-  emit_alopf1_ri(as, 0, E2K_ADDD, src, 0, dst, &as->mcp);
+  emit_alopf1_ri(as, 0, E2K_ADDD, src, 0, dst);
 }
 
 /* Generic load of register with base and (small) offset address. */
 static void emit_loadofs(ASMState *as, IRIns *ir, Reg r, Reg base, int32_t ofs)
 {
-  emit_alopf1_ri(as, 0, irt_is64(ir->t) ? E2K_LDD : E2K_LDW,
-                 base, ofs, r, &as->mcp);
+  emit_alopf1_ri(as, 0, irt_is64(ir->t) ? E2K_LDD : E2K_LDW, base, ofs, r);
 }
 
 /* Generic store of register with base and (small) offset address. */
 static void emit_storeofs(ASMState *as, IRIns *ir, Reg r, Reg base, int32_t ofs)
 {
   emit_alopf3_ri(as, 0, irt_is64(ir->t) ? E2K_STD : E2K_STW,
-                 base, ofs, r, &as->mcp);
+                 base, ofs, r);
 }
 
 /* Add offset to pointer. */
 static void emit_addptr(ASMState *as, Reg r, int32_t ofs)
 {
   if (ofs) {
-    emit_alopf1_ri(as, 0, E2K_ADDD, r, ofs, r, &as->mcp);
+    emit_alopf1_ri(as, 0, E2K_ADDD, r, ofs, r);
   }
 }
 
@@ -760,6 +863,6 @@ static void emit_addptr(ASMState *as, Reg r, int32_t ofs)
 static void emit_spsub(ASMState *as, int32_t ofs)
 {
   if (ofs) {
-    emit_alopf12_i(as, 0, E2K_GETSP, -ofs, RID_SP, &as->mcp);
+    emit_alopf12_i(as, 0, E2K_GETSP, -ofs, RID_SP);
   }
 }
