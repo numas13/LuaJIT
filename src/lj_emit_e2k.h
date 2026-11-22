@@ -344,127 +344,23 @@ static uint32_t bundle_pdst(ASMState *as, E2kOpT type, intptr_t pred)
   }
 }
 
-static int bundle_als(ASMState *as, E2kBundle *bundle, E2kResourceMask mask,
-                      uint32_t als)
+static int bundle_alop(ASMState *as, MCode **p, int spec, uint32_t op,
+                       uint8_t src1, uint8_t src2, uint8_t src3, uint8_t dst)
 {
-  int als_idx = alloc_syllable(as, bundle, mask, RES_ALS_OFFSET);
-  bundle->als[als_idx] = als;
-  bundle->f1++;
-  return als_idx;
-}
-
-static void bundle_ales(ASMState *as, E2kBundle *bundle, int als_idx,
-                        uint16_t ales)
-{
-  uint8_t mask = 1 << als_idx;
-  lj_assertA(mask & ~bundle->hs_ales, "ALES is not available");
-  bundle->hs_ales |= mask;
-  bundle->ales[als_idx] = ales;
-  if (als_idx != 2 && als_idx != 5)
-    bundle->f3++;
-}
-
-static int bundle_alopf7(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
-                         uint32_t src1, uint32_t src2, uint32_t pred)
-{
-  int als_idx;
-  E2kAlopf7 syl = { 0 };
-  syl.fields.pdst = pred;
-  syl.fields.cmpopce = e2kop[op].opce;
-  syl.fields.src2 = src2;
-  syl.fields.src1 = src1;
-  syl.fields.cop = e2kop[op].opc;
-  syl.fields.spec = spec;
-  als_idx = bundle_als(as, &as->bundle, e2kop[op].mask, syl.i);
-  bundle_finalize(as, p);
-  return als_idx;
-}
-
-static int bundle_alopf3(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
-                         uint64_t src1, uint32_t src2, uint32_t src3)
-{
-  int als_idx;
-  E2kAlopf3 syl = { 0 };
-  syl.fields.src3 = src3;
-  syl.fields.src2 = src2;
-  syl.fields.src1 = src1;
-  syl.fields.cop = e2kop[op].opc;
-  syl.fields.spec = spec;
-  als_idx = bundle_als(as, &as->bundle, e2kop[op].mask, syl.i);
-  bundle_finalize(as, p);
-  return als_idx;
-}
-
-static int bundle_alopf2(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
-                         uint32_t src2, uint32_t dst)
-{
-  int als_idx;
-  E2kAlopf2 syl = { 0 };
-  syl.fields.dst = dst;
-  syl.fields.src2 = src2;
-  syl.fields.opce = e2kop[op].opce;
-  syl.fields.cop = e2kop[op].opc;
-  syl.fields.spec = spec;
-  als_idx = bundle_als(as, &as->bundle, e2kop[op].mask, syl.i);
-  bundle_finalize(as, p);
-  return als_idx;
-}
-
-static int bundle_alopf1(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
-                         uint32_t src1, uint32_t src2, uint32_t dst)
-{
-  int als_idx;
-  E2kAlopf1 syl = { 0 };
-  syl.fields.dst = dst;
-  syl.fields.src2 = src2;
-  syl.fields.src1 = src1;
-  syl.fields.cop = e2kop[op].opc;
-  syl.fields.spec = spec;
-  als_idx = bundle_als(as, &as->bundle, e2kop[op].mask, syl.i);
-  bundle_finalize(as, p);
-  return als_idx;
-}
-
-static void bundle_alef2(ASMState *as, uint32_t op, int als_idx)
-{
-  E2kAlef2 syl = { 0 };
-  syl.fields.opce2 = e2kop[op].opce2;
-  syl.fields.opc2 = e2kop[op].opc2;
-  bundle_ales(as, &as->bundle, als_idx, syl.i);
-}
-
-static void bundle_alef1(ASMState *as, uint32_t op, uint32_t src3, int als_idx)
-{
-  E2kAlef1 syl = { 0 };
-  syl.fields.src3 = src3;
-  syl.fields.opc2 = e2kop[op].opc2;
-  bundle_ales(as, &as->bundle, als_idx, syl.i);
-}
-
-static int bundle_alopf12(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
-                          uint32_t src2, uint32_t dst)
-{
-  int als_idx = bundle_alopf2(as, 0, spec, op, src2, dst);
-  bundle_alef2(as, op, als_idx);
-  bundle_finalize(as, p);
-  return als_idx;
-}
-
-static int bundle_alopf21(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
-                          uint32_t src1, uint32_t src2, uint32_t src3,
-                          uint32_t dst)
-{
-  int als_idx = bundle_alopf1(as, 0, spec, op, src1, src2, dst);
-  bundle_alef1(as, op, src3, als_idx);
-  bundle_finalize(as, p);
-  return als_idx;
-}
-
-static int bundle_alopf11(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
-                          uint32_t src1, uint32_t src2, uint32_t dst)
-{
-  int als_idx = bundle_alopf1(as, 0, spec, op, src1, src2, dst);
-  bundle_alef2(as, op, als_idx);
+  int als_idx = alloc_syllable(as, &as->bundle, e2kop[op].mask, RES_ALS_OFFSET);
+  uint32_t als = e2kop[op].als;
+  als |= dst;
+  als |= (uint32_t) src2 << 8;
+  als |= (uint32_t) src1 << 16;
+  als |= spec ? 1 << 31 : 0;
+  as->bundle.als[als_idx] = als;
+  as->bundle.f1++;
+  if (e2kop[op].ales) {
+    as->bundle.hs_ales |= 1 << als_idx;
+    as->bundle.ales[als_idx] = e2kop[op].ales | src3;
+    if (als_idx != 2 && als_idx != 5)
+      as->bundle.f3++;
+  }
   bundle_finalize(as, p);
   return als_idx;
 }
@@ -509,37 +405,37 @@ static void bundle_cds(ASMState *as, int opc, int als, Reg pred, int inverted,
 #define RDST(dst)  bundle_dst(as, E2K_REG, dst)
 #define PDST(pred) bundle_pdst(as, E2K_REG_PRED, pred)
 #define bundle_alopf7_rr(as, spec, op, src1, src2, pred, p) \
-  bundle_alopf7(as, p, spec, op, RSRC1(src1), RSRC2(src2), PDST(pred))
+  bundle_alop(as, p, spec, op, RSRC1(src1), RSRC2(src2), 0, PDST(pred))
 #define bundle_alopf7_ri(as, spec, op, src1, src2, pred, p) \
-  bundle_alopf7(as, p, spec, op, RSRC1(src1), ISRC2(src2), PDST(pred))
+  bundle_alop(as, p, spec, op, RSRC1(src1), ISRC2(src2), 0, PDST(pred))
 #define bundle_alopf3_ri(as, spec, op, src1, src2, src3, p) \
-  bundle_alopf3(as, p, spec, op, RSRC1(src1), ISRC2(src2), RSRC3(src3))
+  bundle_alop(as, p, spec, op, RSRC1(src1), ISRC2(src2), 0, RSRC3(src3))
 #define bundle_alopf12_i(as, spec, op, src2, dst, p) \
-  bundle_alopf12(as, p, spec, op, ISRC2(src2), RDST(dst))
+  bundle_alop(as, p, spec, op, 0, ISRC2(src2), 0, RDST(dst))
 #define bundle_alopf12_r(as, spec, op, src2, dst, p) \
-  bundle_alopf12(as, p, spec, op, RSRC2(src2), RDST(dst))
+  bundle_alop(as, p, spec, op, 0, RSRC2(src2), 0, RDST(dst))
 #define bundle_alopf2_i(as, spec, op, src2, dst, p) \
-  bundle_alopf2(as, p, spec, op, ISRC2(src2), RDST(dst))
+  bundle_alop(as, p, spec, op, 0, ISRC2(src2), 0, RDST(dst))
 #define bundle_alopf2_r(as, spec, op, src2, dst, p) \
-  bundle_alopf2(as, p, spec, op, RSRC2(src2), RDST(dst))
+  bundle_alop(as, p, spec, op, 0, RSRC2(src2), 0, RDST(dst))
 #define bundle_alopf21_rrr(as, spec, op, src1, src2, src3, dst, p) \
-  bundle_alopf21(as, p, spec, op, RSRC1(src1), RSRC2(src2), RSRC3(src3), RDST(dst))
+  bundle_alop(as, p, spec, op, RSRC1(src1), RSRC2(src2), RSRC3(src3), RDST(dst))
 #define bundle_alopf11_rr(as, spec, op, src1, src2, dst, p) \
-  bundle_alopf11(as, p, spec, op, RSRC1(src1), RSRC2(src2), RDST(dst))
+  bundle_alop(as, p, spec, op, RSRC1(src1), RSRC2(src2), 0, RDST(dst))
 #define bundle_alopf11_ir(as, spec, op, src1, src2, dst, p) \
-  bundle_alopf11(as, p, spec, op, ISRC1(src1), RSRC2(src2), RDST(dst))
+  bundle_alop(as, p, spec, op, ISRC1(src1), RSRC2(src2), 0, RDST(dst))
 #define bundle_alopf11_ri(as, spec, op, src1, src2, dst, p) \
-  bundle_alopf11(as, p, spec, op, RSRC1(src1), ISRC2(src2), RDST(dst))
+  bundle_alop(as, p, spec, op, RSRC1(src1), ISRC2(src2), 0, RDST(dst))
 #define bundle_alopf11_ii(as, spec, op, src1, src2, dst, p) \
-  bundle_alopf11(as, p, spec, op, ISRC1(src1), ISRC2(src2), RDST(dst))
+  bundle_alop(as, p, spec, op, ISRC1(src1), ISRC2(src2), 0, RDST(dst))
 #define bundle_alopf1_rr(as, spec, op, src1, src2, dst, p) \
-  bundle_alopf1(as, p, spec, op, RSRC1(src1), RSRC2(src2), RDST(dst))
+  bundle_alop(as, p, spec, op, RSRC1(src1), RSRC2(src2), 0, RDST(dst))
 #define bundle_alopf1_ir(as, spec, op, src1, src2, dst, p) \
-  bundle_alopf1(as, p, spec, op, ISRC1(src1), RSRC2(src2), RDST(dst))
+  bundle_alop(as, p, spec, op, ISRC1(src1), RSRC2(src2), 0, RDST(dst))
 #define bundle_alopf1_ri(as, spec, op, src1, src2, dst, p) \
-  bundle_alopf1(as, p, spec, op, RSRC1(src1), ISRC2(src2), RDST(dst))
+  bundle_alop(as, p, spec, op, RSRC1(src1), ISRC2(src2), 0, RDST(dst))
 #define bundle_alopf1_ii(as, spec, op, src1, src2, dst, p) \
-  bundle_alopf1(as, p, spec, op, ISRC1(src1), ISRC2(src2), RDST(dst))
+  bundle_alop(as, p, spec, op, ISRC1(src1), ISRC2(src2), 0, RDST(dst))
 #define bundle_snapno(as, snapno, p) \
   bundle_alopf1_ii(as, 0, E2K_ADDD, (snapno) < 32 ? (snapno) : 31, \
       (snapno) < 32 ? 0 : (snapno) - 31, RID_TMP, p);

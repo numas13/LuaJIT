@@ -256,51 +256,6 @@ typedef union {
 typedef union {
   uint32_t i;
   struct {
-    uint32_t dst     : 8;
-    uint32_t src2    : 8;
-    uint32_t src1    : 8;
-    uint32_t cop     : 7;
-    uint32_t spec    : 1;
-  } fields;
-} E2kAlopf1;
-
-typedef union {
-  uint32_t i;
-  struct {
-    uint32_t dst     : 8;
-    uint32_t src2    : 8;
-    uint32_t opce    : 8;
-    uint32_t cop     : 7;
-    uint32_t spec    : 1;
-  } fields;
-} E2kAlopf2;
-
-typedef union {
-  uint32_t i;
-  struct {
-    uint32_t src3    : 8;
-    uint32_t src2    : 8;
-    uint32_t src1    : 8;
-    uint32_t cop     : 7;
-    uint32_t spec    : 1;
-  } fields;
-} E2kAlopf3;
-
-typedef union {
-  uint32_t i;
-  struct {
-    uint32_t pdst    : 5;
-    uint32_t cmpopce : 3;
-    uint32_t src2    : 8;
-    uint32_t src1    : 8;
-    uint32_t cop     : 7;
-    uint32_t spec    : 1;
-  } fields;
-} E2kAlopf7;
-
-typedef union {
-  uint32_t i;
-  struct {
     uint32_t disp    : 28;
     uint32_t opc     : 2;
     uint32_t ctpr    : 2;
@@ -422,10 +377,8 @@ typedef struct E2kSched {
 typedef struct E2kOp {
   char *name;
   E2kResourceMask mask;
-  uint32_t opc;
-  uint32_t opce;
-  uint32_t opc2;
-  uint32_t opce2;
+  uint16_t ales;
+  uint32_t als;
 } E2kOp;
 
 enum {
@@ -476,112 +429,112 @@ enum {
 };
 
 static const E2kOp e2kop[] = {
-/*  name        resources       opc   opce  opc2 opce2 */
-  { "ANDs",     RES_ALS_012345, 0x00, 0,    0,    0    },
-  { "ANDd",     RES_ALS_012345, 0x01, 0,    0,    0    },
-  { "ANDNs",    RES_ALS_012345, 0x02, 0,    0,    0    },
-  { "ANDNd",    RES_ALS_012345, 0x03, 0,    0,    0    },
-  { "ORs",      RES_ALS_012345, 0x04, 0,    0,    0    },
-  { "ORd",      RES_ALS_012345, 0x05, 0,    0,    0    },
-  { "ORNs",     RES_ALS_012345, 0x06, 0,    0,    0    },
-  { "ORNd",     RES_ALS_012345, 0x07, 0,    0,    0    },
+/*  name        resources       ales    als */
+  { "ANDs",     RES_ALS_012345, 0x0000, 0x00000000 },
+  { "ANDd",     RES_ALS_012345, 0x0000, 0x01000000 },
+  { "ANDNs",    RES_ALS_012345, 0x0000, 0x02000000 },
+  { "ANDNd",    RES_ALS_012345, 0x0000, 0x03000000 },
+  { "ORs",      RES_ALS_012345, 0x0000, 0x04000000 },
+  { "ORd",      RES_ALS_012345, 0x0000, 0x05000000 },
+  { "ORNs",     RES_ALS_012345, 0x0000, 0x06000000 },
+  { "ORNd",     RES_ALS_012345, 0x0000, 0x07000000 },
 /* --------------------------------------------------- */
-  { "XORs",     RES_ALS_012345, 0x08, 0,    0,    0    },
-  { "XORd",     RES_ALS_012345, 0x09, 0,    0,    0    },
-  { "XORNs",    RES_ALS_012345, 0x0a, 0,    0,    0    },
-  { "XORNd",    RES_ALS_012345, 0x0b, 0,    0,    0    },
-  { "SXT",      RES_ALS_012345, 0x0c, 0,    0,    0    },
-  { "MERGEs",   RES_ALS_012345, 0x0e, 0,    0,    0    },
-  { "MERGEd",   RES_ALS_012345, 0x0f, 0,    0,    0    },
+  { "XORs",     RES_ALS_012345, 0x0000, 0x08000000 },
+  { "XORd",     RES_ALS_012345, 0x0000, 0x09000000 },
+  { "XORNs",    RES_ALS_012345, 0x0000, 0x0a000000 },
+  { "XORNd",    RES_ALS_012345, 0x0000, 0x0b000000 },
+  { "SXT",      RES_ALS_012345, 0x0000, 0x0c000000 },
+  { "MERGEs",   RES_ALS_012345, 0x0000, 0x0e000000 },
+  { "MERGEd",   RES_ALS_012345, 0x0000, 0x0f000000 },
 /* --------------------------------------------------- */
-  { "ADDs",     RES_ALS_012345, 0x10, 0,    0,    0    },
-  { "ADDd",     RES_ALS_012345, 0x11, 0,    0,    0    },
-  { "SUBs",     RES_ALS_012345, 0x12, 0,    0,    0    },
-  { "SUBd",     RES_ALS_012345, 0x13, 0,    0,    0    },
-  { "SCLs",     RES_ALS_012345, 0x14, 0,    0,    0    },
-  { "SCLd",     RES_ALS_012345, 0x15, 0,    0,    0    },
-  { "SCRs",     RES_ALS_012345, 0x16, 0,    0,    0    },
-  { "SCRd",     RES_ALS_012345, 0x17, 0,    0,    0    },
+  { "ADDs",     RES_ALS_012345, 0x0000, 0x10000000 },
+  { "ADDd",     RES_ALS_012345, 0x0000, 0x11000000 },
+  { "SUBs",     RES_ALS_012345, 0x0000, 0x12000000 },
+  { "SUBd",     RES_ALS_012345, 0x0000, 0x13000000 },
+  { "SCLs",     RES_ALS_012345, 0x0000, 0x14000000 },
+  { "SCLd",     RES_ALS_012345, 0x0000, 0x15000000 },
+  { "SCRs",     RES_ALS_012345, 0x0000, 0x16000000 },
+  { "SCRd",     RES_ALS_012345, 0x0000, 0x17000000 },
 /* --------------------------------------------------- */
-  { "SHLs",     RES_ALS_012345, 0x18, 0,    0,    0    },
-  { "SHLd",     RES_ALS_012345, 0x19, 0,    0,    0    },
-  { "SHRs",     RES_ALS_012345, 0x1a, 0,    0,    0    },
-  { "SHRd",     RES_ALS_012345, 0x1b, 0,    0,    0    },
-  { "SARs",     RES_ALS_012345, 0x1c, 0,    0,    0    },
-  { "SARd",     RES_ALS_012345, 0x1d, 0,    0,    0    },
-  { "GETFs",    RES_ALS_012345, 0x1e, 0,    0,    0    },
-  { "GETFd",    RES_ALS_012345, 0x1f, 0,    0,    0    },
+  { "SHLs",     RES_ALS_012345, 0x0000, 0x18000000 },
+  { "SHLd",     RES_ALS_012345, 0x0000, 0x19000000 },
+  { "SHRs",     RES_ALS_012345, 0x0000, 0x1a000000 },
+  { "SHRd",     RES_ALS_012345, 0x0000, 0x1b000000 },
+  { "SARs",     RES_ALS_012345, 0x0000, 0x1c000000 },
+  { "SARd",     RES_ALS_012345, 0x0000, 0x1d000000 },
+  { "GETFs",    RES_ALS_012345, 0x0000, 0x1e000000 },
+  { "GETFd",    RES_ALS_012345, 0x0000, 0x1f000000 },
 /* --------------------------------------------------- */
-  { "CMPBsb",   RES_ALS_0134,   0x20, 0x1,  0,    0    },
-  { "CMPEsb",   RES_ALS_0134,   0x20, 0x2,  0,    0    },
-  { "CMPBEsb",  RES_ALS_0134,   0x20, 0x3,  0,    0    },
-  { "CMPLsb",   RES_ALS_0134,   0x20, 0x6,  0,    0    },
-  { "CMPLEsb",  RES_ALS_0134,   0x20, 0x7,  0,    0    },
-  { "CMPBdb",   RES_ALS_0134,   0x21, 0x1,  0,    0    },
-  { "CMPEdb",   RES_ALS_0134,   0x21, 0x2,  0,    0    },
-  { "CMPBEdb",  RES_ALS_0134,   0x21, 0x3,  0,    0    },
-  { "CMPLdb",   RES_ALS_0134,   0x21, 0x6,  0,    0    },
-  { "CMPLEdb",  RES_ALS_0134,   0x21, 0x7,  0,    0    },
-  { "CMPANDEsb",RES_ALS_0134,   0x22, 0x2,  0,    0    },
-  { "STb",      RES_ALS_25,     0x24, 0,    0,    0    },
-  { "STh",      RES_ALS_25,     0x25, 0,    0,    0    },
-  { "STw",      RES_ALS_25,     0x26, 0,    0,    0    },
-  { "STd",      RES_ALS_25,     0x27, 0,    0,    0    },
+  { "CMPBsb",   RES_ALS_0134,   0x0000, 0x20000020 },
+  { "CMPEsb",   RES_ALS_0134,   0x0000, 0x20000040 },
+  { "CMPBEsb",  RES_ALS_0134,   0x0000, 0x20000060 },
+  { "CMPLsb",   RES_ALS_0134,   0x0000, 0x200000c0 },
+  { "CMPLEsb",  RES_ALS_0134,   0x0000, 0x200000e0 },
+  { "CMPBdb",   RES_ALS_0134,   0x0000, 0x21000020 },
+  { "CMPEdb",   RES_ALS_0134,   0x0000, 0x21000040 },
+  { "CMPBEdb",  RES_ALS_0134,   0x0000, 0x21000060 },
+  { "CMPLdb",   RES_ALS_0134,   0x0000, 0x210000c0 },
+  { "CMPLEdb",  RES_ALS_0134,   0x0000, 0x210000e0 },
+  { "CMPANDEsb",RES_ALS_0134,   0x0000, 0x22000040 },
+  { "STb",      RES_ALS_25,     0x0000, 0x24000000 },
+  { "STh",      RES_ALS_25,     0x0000, 0x25000000 },
+  { "STw",      RES_ALS_25,     0x0000, 0x26000000 },
+  { "STd",      RES_ALS_25,     0x0000, 0x27000000 },
 /* --------------------------------------------------- */
-  { "FCMPEQsb", RES_ALS_0134,   0x2e, 0x0,  0,    0    },
-  { "FCMPLTsb", RES_ALS_0134,   0x2e, 0x1,  0,    0    },
-  { "FCMPLEsb", RES_ALS_0134,   0x2e, 0x2,  0,    0    },
-  { "FCMPNLTsb",RES_ALS_0134,   0x2e, 0x5,  0,    0    },
-  { "FCMPNLEsb",RES_ALS_0134,   0x2e, 0x6,  0,    0    },
-  { "FCMPEQdb", RES_ALS_0134,   0x2f, 0x0,  0,    0    },
-  { "FCMPLTdb", RES_ALS_0134,   0x2f, 0x1,  0,    0    },
-  { "FCMPLEdb", RES_ALS_0134,   0x2f, 0x2,  0,    0    },
-  { "FCMPNLTdb",RES_ALS_0134,   0x2f, 0x5,  0,    0    },
-  { "FCMPNLEdb",RES_ALS_0134,   0x2f, 0x6,  0,    0    },
+  { "FCMPEQsb", RES_ALS_0134,   0x0000, 0x2e000000 },
+  { "FCMPLTsb", RES_ALS_0134,   0x0000, 0x2e000020 },
+  { "FCMPLEsb", RES_ALS_0134,   0x0000, 0x2e000040 },
+  { "FCMPNLTsb",RES_ALS_0134,   0x0000, 0x2e0000a0 },
+  { "FCMPNLEsb",RES_ALS_0134,   0x0000, 0x2e0000c0 },
+  { "FCMPEQdb", RES_ALS_0134,   0x0000, 0x2f000000 },
+  { "FCMPLTdb", RES_ALS_0134,   0x0000, 0x2f000020 },
+  { "FCMPLEdb", RES_ALS_0134,   0x0000, 0x2f000040 },
+  { "FCMPNLTdb",RES_ALS_0134,   0x0000, 0x2f0000a0 },
+  { "FCMPNLEdb",RES_ALS_0134,   0x0000, 0x2f0000c0 },
 /* --------------------------------------------------- */
-  { "FADDs",    RES_ALS_0134,   0x30, 0,    0,    0    },
-  { "FADDd",    RES_ALS_0134,   0x31, 0,    0,    0    },
-  { "FSUBs",    RES_ALS_0134,   0x32, 0,    0,    0    },
-  { "FSUBd",    RES_ALS_0134,   0x33, 0,    0,    0    },
-  { "FMINs",    RES_ALS_0134,   0x34, 0,    0,    0    },
-  { "FMINd",    RES_ALS_0134,   0x35, 0,    0,    0    },
-  { "FMAXs",    RES_ALS_0134,   0x36, 0,    0,    0    },
-  { "FMAXd",    RES_ALS_0134,   0x37, 0,    0,    0    },
+  { "FADDs",    RES_ALS_0134,   0x0000, 0x30000000 },
+  { "FADDd",    RES_ALS_0134,   0x0000, 0x31000000 },
+  { "FSUBs",    RES_ALS_0134,   0x0000, 0x32000000 },
+  { "FSUBd",    RES_ALS_0134,   0x0000, 0x33000000 },
+  { "FMINs",    RES_ALS_0134,   0x0000, 0x34000000 },
+  { "FMINd",    RES_ALS_0134,   0x0000, 0x35000000 },
+  { "FMAXs",    RES_ALS_0134,   0x0000, 0x36000000 },
+  { "FMAXd",    RES_ALS_0134,   0x0000, 0x37000000 },
 /* --------------------------------------------------- */
-  { "FMULs",    RES_ALS_0134,   0x38, 0,    0,    0    },
-  { "FMULd",    RES_ALS_0134,   0x39, 0,    0,    0    },
-  { "FSTOIStr", RES_ALS_0134,   0x3c, 0xc2, 0,    0    },
-  { "ISTOFS",   RES_ALS_0134,   0x3c, 0xc4, 0,    0    },
-  { "FDTOIDtr", RES_ALS_0134,   0x3d, 0xc2, 0,    0    },
-  { "IDTOFD",   RES_ALS_0134,   0x3d, 0xc4, 0,    0    },
-  { "FSTOIDtr", RES_ALS_0134,   0x3e, 0xc2, 0,    0    },
-  { "ISTOFD",   RES_ALS_0134,   0x3e, 0xc4, 0,    0    },
-  { "FSTOFD",   RES_ALS_0134,   0x3e, 0xc6, 0,    0    },
-  { "FDTOIStr", RES_ALS_0134,   0x3f, 0xc2, 0,    0    },
-  { "IDTOFS",   RES_ALS_0134,   0x3f, 0xc4, 0,    0    },
-  { "FDTOFS",   RES_ALS_0134,   0x3f, 0xc6, 0,    0    },
+  { "FMULs",    RES_ALS_0134,   0x0000, 0x38000000 },
+  { "FMULd",    RES_ALS_0134,   0x0000, 0x39000000 },
+  { "FSTOIStr", RES_ALS_0134,   0x0000, 0x3cc20000 },
+  { "ISTOFS",   RES_ALS_0134,   0x0000, 0x3cc40000 },
+  { "FDTOIDtr", RES_ALS_0134,   0x0000, 0x3dc20000 },
+  { "IDTOFD",   RES_ALS_0134,   0x0000, 0x3dc40000 },
+  { "FSTOIDtr", RES_ALS_0134,   0x0000, 0x3ec20000 },
+  { "ISTOFD",   RES_ALS_0134,   0x0000, 0x3ec40000 },
+  { "FSTOFD",   RES_ALS_0134,   0x0000, 0x3ec60000 },
+  { "FDTOIStr", RES_ALS_0134,   0x0000, 0x3fc20000 },
+  { "IDTOFS",   RES_ALS_0134,   0x0000, 0x3fc40000 },
+  { "FDTOFS",   RES_ALS_0134,   0x0000, 0x3fc60000 },
 /* --------------------------------------------------- */
-  { "MOVTd",    RES_ALS0,       0x61, 0xc0, 0,    0    },
-  { "LDb",      RES_ALS_0235,   0x64, 0,    0,    0    },
-  { "LDh",      RES_ALS_0235,   0x65, 0,    0,    0    },
-  { "LDw",      RES_ALS_0235,   0x66, 0,    0,    0    },
-  { "LDd",      RES_ALS_0235,   0x67, 0,    0,    0    },
+  { "MOVTd",    RES_ALS0,       0x0000, 0x61c00000 },
+  { "LDb",      RES_ALS_0235,   0x0000, 0x64000000 },
+  { "LDh",      RES_ALS_0235,   0x0000, 0x65000000 },
+  { "LDw",      RES_ALS_0235,   0x0000, 0x66000000 },
+  { "LDd",      RES_ALS_0235,   0x0000, 0x67000000 },
 /* --------------------------------------------------- */
-  { "MULs",     RES_ALS_0134,   0x20, 0,    0x01, 0xc0 },
-  { "MULd",     RES_ALS_0134,   0x21, 0,    0x01, 0xc0 },
-  { "UMULX",    RES_ALS_0134,   0x22, 0,    0x01, 0xc0 },
-  { "SMULX",    RES_ALS_0134,   0x23, 0,    0x01, 0xc0 },
+  { "MULs",     RES_ALS_0134,   0x01c0, 0x20000000 },
+  { "MULd",     RES_ALS_0134,   0x01c0, 0x21000000 },
+  { "UMULX",    RES_ALS_0134,   0x01c0, 0x22000000 },
+  { "SMULX",    RES_ALS_0134,   0x01c0, 0x23000000 },
 /* --------------------------------------------------- */
-  { "FDIVd",    RES_ALS5,       0x49, 0,    0x01, 0xc0 },
-  { "FSQRTId",  RES_ALS5,       0x4d, 0xc0, 0x01, 0xc0 },
+  { "FDIVd",    RES_ALS5,       0x01c0, 0x49000000 },
+  { "FSQRTId",  RES_ALS5,       0x01c0, 0x4dc00000 },
 /* --------------------------------------------------- */
-  { "FSQRTTd",  RES_ALS5,       0x51, 0,    0x01, 0xc0 },
+  { "FSQRTTd",  RES_ALS5,       0x01c0, 0x51000000 },
 /* --------------------------------------------------- */
-  { "GETSP",    RES_ALS0,       0x58, 0xec, 0x01, 0xc0 },
+  { "GETSP",    RES_ALS0,       0x01c0, 0x58ec0000 },
 /* --------------------------------------------------- */
-  { "FDTOIFd",  RES_ALS_0134,   0x6d, 0,    0x01, 0xc0 },
+  { "FDTOIFd",  RES_ALS_0134,   0x01c0, 0x6d000000 },
 /* --------------------------------------------------- */
-  { "PSHUFB",   RES_ALS_0134,   0x4d, 0,    0x0f, 0    },
+  { "PSHUFB",   RES_ALS_0134,   0x0f00, 0x4d000000 },
 /* --------------------------------------------------- */
 };
 

@@ -71,7 +71,7 @@ static void asm_guard_gc(ASMState *as, Reg pred, int inverted)
   /* TODO: e2k: emit gc check marker */
   emit_serialize(as);
   /* Keep in sync with E2K_NOPATCH_GC_CHECK */
-  bundle_alopf1(as, &as->mcp, 0, E2K_ORD, 0xc0, 0xc0, 0xdf);
+  bundle_alop(as, &as->mcp, 0, E2K_ORD, 0xc0, 0xc0, 0, 0xdf);
 }
 
 /* -- Operand fusion ------------------------------------------------------ */
@@ -1667,28 +1667,36 @@ static uint64_t e2k_extract_lit(jit_State *J, MCode *p, uint8_t src2) {
 /* Look for load of exit number. */
 static MCode *e2k_lookup_exitno_load(jit_State *J, MCode *p, ExitNo *exitno) {
   E2kHS hs = { p[0] };
-  E2kAlopf1 *als;
+  uint32_t als;
+  uint8_t src1, src2;
+  int offset;
 
   if (hs.fields.als == 0)
     return NULL;
 
-  als = (E2kAlopf1 *) (p + (hs.fields.x_s_sw & 2 ? 2 : 1));
+  offset = hs.fields.x_s_sw & 2 ? 2 : 1;
   for (int i = 0; i < 6; i++) {
+    /* ALS must be allocated. */
     if ((hs.fields.als & (1 << i)) == 0)
       continue;
 
+    /* ALES must not be allocated. */
+    if ((hs.fields.ales & (1 << i)) != 0)
+      continue;
+
     /* Look for addd imm, imm|lit, TMP0 */
-    if ((hs.fields.ales & (1 << i)) == 0
-        && als->fields.cop == E2K_OPC_ADDD
-        && als->fields.dst == E2K_REG_EXITNO
-        && E2K_IS_SRC1_IMM5(als->fields.src1)
-        && (E2K_IS_SRC2_IMM4(als->fields.src2)
-            || E2K_IS_SRC2_LIT(als->fields.src2))) {
-      *exitno = (als->fields.src1 & 31) + e2k_extract_lit(J, p, als->fields.src2);
-      return (MCode *) als;
+    als = p[offset];
+    src2 = als >> 8;
+    src1 = als >> 16;
+    if (((als >> 24) & 0x7f) == E2K_OPC_ADDD
+        && (als & 0xff) == E2K_REG_EXITNO
+        && E2K_IS_SRC1_IMM5(src1)
+        && (E2K_IS_SRC2_IMM4(src2) || E2K_IS_SRC2_LIT(src2))) {
+      *exitno = (src1 & 31) + e2k_extract_lit(J, p, src2);
+      return p + offset;
     }
 
-    als += 1;
+    offset += 1;
   }
 
   return NULL;
