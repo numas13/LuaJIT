@@ -686,7 +686,7 @@ static void asm_uref(ASMState *as, IRIns *ir)
       ofs = (intptr_t)offsetof(GCupval, closed);
       emit_alopf1_ri(as, 0, E2K_LDB, dest, ofs, tmp, 0);
     }
-    as->mcp = emit_bundle_finalize(as, as->mcp);
+    emit_bundle_finalize(as, &as->mcp);
     if (irref_isk(ir->op1)) {
       GCfunc *fn = ir_kfunc(IR(ir->op1));
       GCobj *o = gcref(fn->l.uvptr[(ir->op2 >> 8)]);
@@ -1604,7 +1604,7 @@ static Reg asm_setup_call_slots(ASMState *as, IRIns *ir, const CCallInfo *ci)
 /* Target-specific setup. */
 static void asm_setup_target(ASMState *as)
 {
-  emit_bundle_setup(as);
+  emit_bundle_reset(&as->bundle);
   asm_exitstub_setup(as);
 }
 

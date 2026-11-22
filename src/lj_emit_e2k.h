@@ -75,14 +75,14 @@ static E2kOpT get_const_type(intptr_t val)
 
 /* -- Bundling ------------------------------------------------------------ */
 
-static void emit_bundle_setup(ASMState *as)
+static void emit_bundle_reset(E2kBundle *bundle)
 {
-  memset(&as->bundle, 0, sizeof(E2kBundle));
-  as->bundle.res = RES_INIT;
-  as->bundle.f1 = 1; /* HS itself */
+  memset(bundle, 0, sizeof(E2kBundle));
+  bundle->res = RES_INIT;
+  bundle->f1 = 1; /* HS itself */
 }
 
-static MCode *emit_bundle_finalize(ASMState *as, MCode *mxp)
+static MCode *emit_bundle_pack(ASMState *as, MCode *mxp)
 {
   uint32_t hs_x_s_sw = (as->bundle.res & RES_SS) ? 0 : 0x2;
   uint32_t hs_c = (~as->bundle.res & RES_CS_ALL) >> RES_CS_SHIFT;
@@ -177,8 +177,15 @@ static MCode *emit_bundle_finalize(ASMState *as, MCode *mxp)
   if (hs_x_s_sw) *--mxp = as->bundle.ss;
   *--mxp = hs.i; 
 
-  emit_bundle_setup(as);
   return mxp;
+}
+
+static void emit_bundle_finalize(ASMState *as, MCode **mxp)
+{
+  if (mxp) {
+    *mxp = emit_bundle_pack(as, *mxp);
+    emit_bundle_reset(&as->bundle);
+  }
 }
 
 /* -- Emit basic instructions --------------------------------------------- */
@@ -341,7 +348,7 @@ static int emit_alopf7(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
 
   as->bundle.als[als_idx] = syl.i;
   as->bundle.f1++;
-  if (p) *p = emit_bundle_finalize(as, *p);
+  emit_bundle_finalize(as, p);
   return als_idx;
 }
 
@@ -360,7 +367,7 @@ static int emit_alopf3(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
 
   as->bundle.als[als_idx] = syl.i;
   as->bundle.f1++;
-  if (p) *p = emit_bundle_finalize(as, *p);
+  emit_bundle_finalize(as, p);
   return als_idx;
 }
 
@@ -379,7 +386,7 @@ static int emit_alopf2(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
 
   as->bundle.als[als_idx] = syl.i;
   as->bundle.f1++;
-  if (p) *p = emit_bundle_finalize(as, *p);
+  emit_bundle_finalize(as, p);
   return als_idx;
 }
 
@@ -398,7 +405,7 @@ static int emit_alopf1(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
 
   as->bundle.als[als_idx] = syl.i;
   as->bundle.f1++;
-  if (p) *p = emit_bundle_finalize(as, *p);
+  emit_bundle_finalize(as, p);
   return als_idx;
 }
 
@@ -437,7 +444,7 @@ static int emit_alopf12(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
 {
   int als_idx = emit_alopf2(as, 0, spec, op, src2, dst);
   emit_alef2(as, op, als_idx);
-  if (p) *p = emit_bundle_finalize(as, *p);
+  emit_bundle_finalize(as, p);
   return als_idx;
 }
 
@@ -446,7 +453,7 @@ static int emit_alopf21(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
 {
   int als_idx = emit_alopf1(as, 0, spec, op, src1, src2, dst);
   emit_alef1(as, op, src3, als_idx);
-  if (p) *p = emit_bundle_finalize(as, *p);
+  emit_bundle_finalize(as, p);
   return als_idx;
 }
 
@@ -455,7 +462,7 @@ static int emit_alopf11(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
 {
   int als_idx = emit_alopf1(as, 0, spec, op, src1, src2, dst);
   emit_alef2(as, op, als_idx);
-  if (p) *p = emit_bundle_finalize(as, *p);
+  emit_bundle_finalize(as, p);
   return als_idx;
 }
 
@@ -483,7 +490,7 @@ static void emit_cds(ASMState *as, int opc, int als, Reg pred, int inverted, MCo
   syl.fields.opc = opc;
   as->bundle.cds[cds_idx] = (uint32_t)syl.i;
   as->bundle.hs_cds++;
-  if (p) *p = emit_bundle_finalize(as, *p);
+  emit_bundle_finalize(as, p);
 }
 
 #define emit_rlp(as, als, pred, inv, p) \
@@ -609,7 +616,7 @@ static void emit_ct(ASMState *as, Reg ctpr, Reg pred, int inverted, MCode **p)
 
   as->bundle.ss = syl.i;
   as->bundle.f1++;
-  if (p) *p = emit_bundle_finalize(as, *p);
+  emit_bundle_finalize(as, p);
 }
 
 static void emit_call(ASMState *as, Reg ctpr, Reg pred,
@@ -623,7 +630,7 @@ static void emit_call(ASMState *as, Reg ctpr, Reg pred,
   syl.fields.params = wbs;
   as->bundle.cs[1] = syl.i;
   as->bundle.f2++;
-  if (p) *p = emit_bundle_finalize(as, *p);
+  emit_bundle_finalize(as, p);
 }
 
 static void emit_copf2(ASMState *as, uint32_t opc, Reg ctpr,
@@ -639,7 +646,7 @@ static void emit_copf2(ASMState *as, uint32_t opc, Reg ctpr,
 
   as->bundle.cs[0] = syl.i;
   as->bundle.f1++;
-  if (p) *p = emit_bundle_finalize(as, *p);
+  emit_bundle_finalize(as, p);
 }
 
 static void emit_disp(ASMState *as, Reg ctpr, MCode *target, MCode **p)
@@ -705,7 +712,7 @@ static void emit_setr(ASMState *as, MCode **p,
         emit_lts(as, RES_LTS0, E2K_CONST32, lts0.i);
     }
 
-    if (p) *p = emit_bundle_finalize(as, *p);
+    emit_bundle_finalize(as, p);
 }
 
 #define emit_window(as, wsz, nfx, dbl, rsz, rbs, rcur, p) \
