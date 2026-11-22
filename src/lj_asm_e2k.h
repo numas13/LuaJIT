@@ -1562,16 +1562,21 @@ static void asm_tail_fixup(ASMState *as, TraceNo lnk)
   MCode *target = lnk ? traceref(as->J, lnk)->mcode : (MCode *)lj_vm_exit_interp;
   MCode *p = as->mctop;
   int32_t spadj = as->T->spadjust;
-  emit_ibranch(as, target, 0, 0, &p);
-  /* 4(HS+SS+CS0+Align) */
   if (spadj) {
+    p[-2] = E2K_NOP(2, 0);
+    p[-1] = 0;
+    p -= 2; /* skip nops */
+    emit_bundle_len(as, 6);
+    emit_ibranch(as, target, 0, 0, 0);
     emit_alopf12_i(as, 0, E2K_GETSP, spadj, RID_SP, &p);
-    /* 4(HS+ALS+ALES+LTS) */
   } else {
     p[-4] = E2K_NOP(4, 0);
     p[-3] = 0;
     p[-2] = 0;
     p[-1] = 0;
+    p -= 4; /* skip nops */
+    emit_bundle_len(as, 4);
+    emit_ibranch(as, target, 0, 0, &p);
   }
 }
 
