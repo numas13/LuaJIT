@@ -39,7 +39,7 @@ static unsigned alloc_syllable(ASMState *as, E2kBundle *bundle,
 }
 
 #define alloc_als(as, bundle, mask) \
-  alloc_syllable(as, bundle, mask, RES_ALS_SHIFT)
+  alloc_syllable(as, bundle, mask, RES_ALS_OFFSET)
 
 #define checku4(x)  ((x) == (int32_t)(uint8_t)(x & 0xf))
 #define checku5(x)  ((x) == (int32_t)(uint8_t)(x & 0x1f))
@@ -100,10 +100,10 @@ static void emit_bundle_reset(E2kBundle *bundle)
 static MCode *emit_bundle_pack(ASMState *as, MCode *mxp)
 {
   uint32_t hs_x_s_sw = (as->bundle.res & RES_SS) ? 0 : 0x2;
-  uint32_t hs_c = (~as->bundle.res & RES_CS_ALL) >> RES_CS_SHIFT;
+  uint32_t hs_c = (~as->bundle.res & RES_CS_ALL) >> RES_CS_OFFSET;
   uint32_t hs_cds = (as->bundle.hs_cds + 1) & -2;
-  uint32_t hs_ales = (~as->bundle.res & RES_ALES_ALL) >> RES_ALES_SHIFT;
-  uint32_t hs_als = ~as->bundle.res & RES_ALS_ALL;
+  uint32_t hs_als = (~as->bundle.res & RES_ALS_ALL) >> RES_ALS_OFFSET;
+  uint32_t hs_ales = as->bundle.hs_ales;
 
   uint8_t f1 = as->bundle.f1;
   uint8_t f2 = as->bundle.f2;
@@ -143,7 +143,7 @@ static MCode *emit_bundle_pack(ASMState *as, MCode *mxp)
   if (hs_cds > 2) *--mxp = (as->bundle.cds[2] << 16) | as->bundle.cds[3];
   if (hs_cds > 4) *--mxp = (as->bundle.cds[4] << 16) | as->bundle.cds[5];
   /* LTS[3-0], 32-bit, 16-bit half syls not implemented */
-  int used_lts = ((~as->bundle.res & RES_LTS_ALL)  >> RES_LTS_SHIFT);
+  int used_lts = ((~as->bundle.res & RES_LTS_ALL)  >> RES_LTS_OFFSET);
   for (int i = 0; i < 4; i++) {
     if (used_lts & (1 << i)) {
       *--mxp = as->bundle.lts[i];
@@ -220,7 +220,7 @@ static uint32_t emit_lts(ASMState *as, uint64_t mask, E2kOpT type, uint64_t val)
   lts = alloc_resource(as, &as->bundle, mask);
   if (type == E2K_CONST64) /* check 2 syls for 64-bit literal */
     alloc_resource(as, &as->bundle, lts << 1);
-  lts = lts >> RES_LTS_SHIFT;
+  lts = lts >> RES_LTS_OFFSET;
   while (lts >>= 1)
     lts_idx++;
 
@@ -347,6 +347,17 @@ static uint32_t emit_pdst(ASMState *as, E2kOpT type, intptr_t pred)
   }
 }
 
+static void emit_ales(ASMState *as, E2kBundle *bundle, int als_idx,
+                      uint16_t ales)
+{
+  uint8_t mask = 1 << als_idx;
+  lj_assertA(mask & ~bundle->hs_ales, "ALES is not available");
+  bundle->hs_ales |= mask;
+  bundle->ales[als_idx] = ales;
+  if (als_idx != 2 && als_idx != 5)
+    bundle->f3++;
+}
+
 static int emit_alopf7(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
                        uint32_t src1, uint32_t src2, uint32_t pred)
 {
@@ -426,32 +437,18 @@ static int emit_alopf1(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
 
 static void emit_alef2(ASMState *as, uint32_t op, int als_idx)
 {
-  /* No combined operations on 2 and 5 channels */
-  int res = 1 << (RES_ALES_SHIFT + als_idx);
-  alloc_resource(as, &as->bundle, res);
-  if (!(res & RES_ALES_25)) {
-    E2kAlef2 syl;
-    syl.i = 0;
-    syl.fields.opce2 = e2kop[op].opce2;
-    syl.fields.opc2 = e2kop[op].opc2;
-    as->bundle.ales[als_idx] = syl.i;
-    as->bundle.f3++;
-  }
+  E2kAlef2 syl = { 0 };
+  syl.fields.opce2 = e2kop[op].opce2;
+  syl.fields.opc2 = e2kop[op].opc2;
+  emit_ales(as, &as->bundle, als_idx, syl.i);
 }
 
 static void emit_alef1(ASMState *as, uint32_t op, uint32_t src3, int als_idx)
 {
-  /* No combined operations on 2 and 5 channels */
-  int res = 1 << (RES_ALES_SHIFT + als_idx);
-  alloc_resource(as, &as->bundle, res);
-  if (!(res & RES_ALES_25)) {
-    E2kAlef1 syl;
-    syl.i = 0;
-    syl.fields.src3 = (uint16_t)src3;
-    syl.fields.opc2 = e2kop[op].opc2;
-    as->bundle.ales[als_idx] = syl.i;
-    as->bundle.f3++;
-  }
+  E2kAlef1 syl = { 0 };
+  syl.fields.src3 = src3;
+  syl.fields.opc2 = e2kop[op].opc2;
+  emit_ales(as, &as->bundle, als_idx, syl.i);
 }
 
 static int emit_alopf12(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
@@ -483,7 +480,7 @@ static int emit_alopf11(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
 
 static void emit_cds(ASMState *as, int opc, int als, Reg pred, int inverted, MCode **p)
 {
-  int cds_idx = alloc_syllable(as, &as->bundle, RES_CDS_ALL, RES_CDS_SHIFT);
+  int cds_idx = alloc_syllable(as, &as->bundle, RES_CDS_ALL, RES_CDS_OFFSET);
   E2kCDS syl;
   syl.i = 0;
   syl.fields.pred = (pred - RID_PRED0)|0x60;

@@ -130,64 +130,63 @@ static LJ_AINLINE uint32_t *exitstub_trace_addr_(uint32_t *p, uint32_t exitno)
 
 /* -- e2k bundle ---------------------------------------------------------- */
 
+#define RES_SS_OFFSET   0
+#define RES_ALS_OFFSET  (RES_SS_OFFSET + 1)
+#define RES_CS_OFFSET   (RES_ALS_OFFSET + 6)
+#define RES_AAS_OFFSET  (RES_CS_OFFSET + 2)
+#define RES_LTS_OFFSET  (RES_AAS_OFFSET + 6)
+#define RES_PLS_OFFSET  (RES_LTS_OFFSET + 4)
+#define RES_CDS_OFFSET  (RES_PLS_OFFSET + 3)
+#define RES_MASK_SIZE   (RES_CDS_OFFSET + 6)
+
+#define RES_BIT(offset) (1ULL << (offset))
+
 typedef enum E2kResourceMask {
-  /* HS */
-  RES_ALS0    = 0x0001,
-  RES_ALS1    = 0x0002,
-  RES_ALS2    = 0x0004,
-  RES_ALS3    = 0x0008,
-  RES_ALS4    = 0x0010,
-  RES_ALS5    = 0x0020,
-  RES_CS0     = 0x0040,
-  RES_CS1     = 0x0080,
-  RES_AAS0    = 0x0100,
-  RES_AAS1    = 0x0200,
-  RES_AAS2    = 0x0400,
-  RES_AAS3    = 0x0800,
-  RES_AAS4    = 0x1000,
-  RES_AAS5    = 0x2000,
-  RES_LTS0    = 0x4000,
-  RES_LTS1    = 0x8000,
-  RES_LTS2    = 0x10000,
-  RES_LTS3    = 0x20000,
-  RES_PLS0    = 0x40000,
-  RES_PLS1    = 0x80000,
-  RES_PLS2    = 0x100000,
-  RES_ALES0   = 0x200000,
-  RES_ALES1   = 0x400000,
-  RES_ALES2   = 0x800000,
-  RES_ALES3   = 0x1000000,
-  RES_ALES4   = 0x2000000,
-  RES_ALES5   = 0x4000000,
-  RES_SS      = 0x8000000,
-  RES_CDS00   = 0x10000000,
-  RES_CDS01   = 0x20000000,
-  RES_CDS10   = 0x40000000,
-  RES_CDS11   = 0x80000000,
-  RES_CDS20   = 0x100000000,
-  RES_CDS21   = 0x200000000,
-  RES_MASK    = 0x3ffffffff,
-  RES_INIT    = RES_MASK,
-  RES_NONE    = 0,
-  RES_ALS_012345 = RES_ALS0 | RES_ALS1 | RES_ALS2 | RES_ALS3 | RES_ALS4 | RES_ALS5,
-  RES_ALS_0235   = RES_ALS0 | RES_ALS2 | RES_ALS3 | RES_ALS5,
-  RES_ALS_0134   = RES_ALS0 | RES_ALS1 | RES_ALS3 | RES_ALS4,
-  RES_ALS_03     = RES_ALS0 | RES_ALS3,
-  RES_ALS_25     = RES_ALS2 | RES_ALS5,
-  RES_ALS_ALL    = RES_ALS_012345,
-  RES_ALES_25    = RES_ALES2 | RES_ALES5,
-  RES_ALES_ALL   = RES_ALES0 | RES_ALES1 | RES_ALES2 | RES_ALES3 | RES_ALES4 | RES_ALES5,
-  RES_CS_ALL     = RES_CS0 | RES_CS1,
-  RES_LTS_ALL    = RES_LTS0 | RES_LTS1 | RES_LTS2| RES_LTS3,
-  RES_CDS_ALL    = RES_CDS00 | RES_CDS01 | RES_CDS10 | RES_CDS11 | RES_CDS20 | RES_CDS21,
-  RES_CDS0       = RES_CDS00 | RES_CDS01,
-  RES_CDS1       = RES_CDS10 | RES_CDS11,
-  RES_CDS2       = RES_CDS20 | RES_CDS21,
-  RES_ALS_SHIFT  = 0,
-  RES_CS_SHIFT   = 6,
-  RES_LTS_SHIFT  = 14,
-  RES_ALES_SHIFT = 21,
-  RES_CDS_SHIFT  = 28,
+  RES_NONE        = 0,
+  RES_ALL         = RES_BIT(RES_MASK_SIZE) - 1,
+  RES_INIT        = RES_ALL,
+
+  RES_SS          = RES_BIT(RES_SS_OFFSET),
+  RES_ALS0        = RES_BIT(RES_ALS_OFFSET + 0),
+  RES_ALS1        = RES_BIT(RES_ALS_OFFSET + 1),
+  RES_ALS2        = RES_BIT(RES_ALS_OFFSET + 2),
+  RES_ALS3        = RES_BIT(RES_ALS_OFFSET + 3),
+  RES_ALS4        = RES_BIT(RES_ALS_OFFSET + 4),
+  RES_ALS5        = RES_BIT(RES_ALS_OFFSET + 5),
+  RES_CS0         = RES_BIT(RES_CS_OFFSET + 0),
+  RES_CS1         = RES_BIT(RES_CS_OFFSET + 1),
+  RES_AAS0        = RES_BIT(RES_AAS_OFFSET + 0),
+  RES_AAS1        = RES_BIT(RES_AAS_OFFSET + 1),
+  RES_AAS2        = RES_BIT(RES_AAS_OFFSET + 2),
+  RES_AAS3        = RES_BIT(RES_AAS_OFFSET + 3),
+  RES_AAS4        = RES_BIT(RES_AAS_OFFSET + 4),
+  RES_AAS5        = RES_BIT(RES_AAS_OFFSET + 5),
+  RES_LTS0        = RES_BIT(RES_LTS_OFFSET + 0),
+  RES_LTS1        = RES_BIT(RES_LTS_OFFSET + 1),
+  RES_LTS2        = RES_BIT(RES_LTS_OFFSET + 2),
+  RES_LTS3        = RES_BIT(RES_LTS_OFFSET + 3),
+  RES_PLS0        = RES_BIT(RES_PLS_OFFSET + 0),
+  RES_PLS1        = RES_BIT(RES_PLS_OFFSET + 1),
+  RES_PLS2        = RES_BIT(RES_PLS_OFFSET + 2),
+  RES_CDS00       = RES_BIT(RES_CDS_OFFSET + 0),
+  RES_CDS01       = RES_BIT(RES_CDS_OFFSET + 1),
+  RES_CDS10       = RES_BIT(RES_CDS_OFFSET + 2),
+  RES_CDS11       = RES_BIT(RES_CDS_OFFSET + 3),
+  RES_CDS20       = RES_BIT(RES_CDS_OFFSET + 4),
+  RES_CDS21       = RES_BIT(RES_CDS_OFFSET + 5),
+  RES_ALS_03      = RES_ALS0 | RES_ALS3,
+  RES_ALS_14      = RES_ALS1 | RES_ALS4,
+  RES_ALS_25      = RES_ALS2 | RES_ALS5,
+  RES_ALS_0134    = RES_ALS_03 | RES_ALS_14,
+  RES_ALS_0235    = RES_ALS_03 | RES_ALS_25,
+  RES_ALS_012345  = RES_ALS_03 | RES_ALS_14 | RES_ALS_25,
+  RES_ALS_ALL     = RES_ALS_012345,
+  RES_CS_ALL      = RES_CS0 | RES_CS1,
+  RES_LTS_ALL     = RES_LTS0 | RES_LTS1 | RES_LTS2 | RES_LTS3,
+  RES_CDS0        = RES_CDS00 | RES_CDS01,
+  RES_CDS1        = RES_CDS10 | RES_CDS11,
+  RES_CDS2        = RES_CDS20 | RES_CDS21,
+  RES_CDS_ALL     = RES_CDS0 | RES_CDS1 | RES_CDS2,
 } E2kResourceMask;
 
 typedef struct {
@@ -197,8 +196,9 @@ typedef struct {
   uint8_t f3;
   uint8_t f4;
   uint8_t hs_cds;
-  uint32_t nop;
-  uint64_t res;
+  uint8_t hs_ales;
+  uint8_t nop;
+  E2kResourceMask res;
   uint32_t ss;
   uint32_t als[6];
   uint32_t cs[2];
