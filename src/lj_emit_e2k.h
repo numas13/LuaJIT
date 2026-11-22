@@ -5,26 +5,41 @@
 
 /* -- Bundling helpers ---------------------------------------------------- */
 
-static uint64_t check_resource(ASMState *as, E2kBundle *bundle, uint64_t mask)
+static E2kResourceMask try_alloc_resource(E2kBundle *bundle,
+                                          E2kResourceMask mask)
 {
-  uint64_t res = bundle->res & mask;
-  if (!res) {
-    lj_assertA(0, "no available resources");
+  E2kResourceMask res = bundle->res & mask;
+  if (res) {
+    res = res & -res;
+    bundle->res &= ~res;
   }
-  res = res & (-res);
-  bundle->res &= ~res;
   return res;
 }
 
-static int get_sylidx(ASMState *as, E2kBundle *bundle, uint64_t mask, uint64_t shift)
+static E2kResourceMask alloc_resource(ASMState *as, E2kBundle *bundle,
+                                      E2kResourceMask mask)
 {
-  uint64_t syl = check_resource(as, bundle, mask);
-  syl = syl >> shift;
-  int idx = 0;
-  while(syl >>= 1)
-    idx++;
-  return idx;
+  E2kResourceMask res = try_alloc_resource(bundle, mask);
+  lj_assertA(res, "no available resources");
+  return res;
 }
+
+static unsigned get_syllable_index(ASMState *as, E2kResourceMask res,
+                                   unsigned offset)
+{
+  lj_assertA(res, "empty resource");
+  return __builtin_ctz(res >> offset);
+}
+
+static unsigned alloc_syllable(ASMState *as, E2kBundle *bundle,
+                               E2kResourceMask mask, unsigned offset)
+{
+  E2kResourceMask res = alloc_resource(as, bundle, mask);
+  return get_syllable_index(as, res, offset);
+}
+
+#define alloc_als(as, bundle, mask) \
+  alloc_syllable(as, bundle, mask, RES_ALS_SHIFT)
 
 #define checku4(x)  ((x) == (int32_t)(uint8_t)(x & 0xf))
 #define checku5(x)  ((x) == (int32_t)(uint8_t)(x & 0x1f))
@@ -202,9 +217,9 @@ static uint32_t emit_lts(ASMState *as, uint64_t mask, E2kOpT type, uint64_t val)
   } else {
     mask &= RES_LTS2|RES_LTS1|RES_LTS0;
   }
-  lts = check_resource(as, &as->bundle, mask);
+  lts = alloc_resource(as, &as->bundle, mask);
   if (type == E2K_CONST64) /* check 2 syls for 64-bit literal */
-    check_resource(as, &as->bundle, lts << 1);
+    alloc_resource(as, &as->bundle, lts << 1);
   lts = lts >> RES_LTS_SHIFT;
   while (lts >>= 1)
     lts_idx++;
@@ -336,7 +351,7 @@ static int emit_alopf7(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
                        uint32_t src1, uint32_t src2, uint32_t pred)
 {
   uint64_t mask = e2kop[op].mask;
-  int als_idx = get_sylidx(as, &as->bundle, mask, RES_ALS_SHIFT);
+  int als_idx = alloc_als(as, &as->bundle, mask);
   E2kAlopf7 syl;
   syl.i = 0;
   syl.fields.pdst = pred;
@@ -356,7 +371,7 @@ static int emit_alopf3(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
                         uint64_t src1, uint32_t src2, uint32_t src3)
 {
   uint64_t mask = e2kop[op].mask;
-  int als_idx = get_sylidx(as, &as->bundle, mask, RES_ALS_SHIFT);
+  int als_idx = alloc_als(as, &as->bundle, mask);
   E2kAlopf3 syl;
   syl.i = 0;
   syl.fields.src3  = src3;
@@ -375,7 +390,7 @@ static int emit_alopf2(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
                        uint32_t src2, uint32_t dst)
 {
   uint64_t mask = e2kop[op].mask;
-  int als_idx = get_sylidx(as, &as->bundle, mask, RES_ALS_SHIFT);
+  int als_idx = alloc_als(as, &as->bundle, mask);
   E2kAlopf2 syl;
   syl.i = 0;
   syl.fields.dst  = dst;
@@ -394,7 +409,7 @@ static int emit_alopf1(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
                         uint32_t src1, uint32_t src2, uint32_t dst)
 {
   uint64_t mask = e2kop[op].mask;
-  int als_idx = get_sylidx(as, &as->bundle, mask, RES_ALS_SHIFT);
+  int als_idx = alloc_als(as, &as->bundle, mask);
   E2kAlopf1 syl;
   syl.i = 0;
   syl.fields.dst  = dst;
@@ -413,7 +428,7 @@ static void emit_alef2(ASMState *as, uint32_t op, int als_idx)
 {
   /* No combined operations on 2 and 5 channels */
   int res = 1 << (RES_ALES_SHIFT + als_idx);
-  check_resource(as, &as->bundle, res);
+  alloc_resource(as, &as->bundle, res);
   if (!(res & RES_ALES_25)) {
     E2kAlef2 syl;
     syl.i = 0;
@@ -428,7 +443,7 @@ static void emit_alef1(ASMState *as, uint32_t op, uint32_t src3, int als_idx)
 {
   /* No combined operations on 2 and 5 channels */
   int res = 1 << (RES_ALES_SHIFT + als_idx);
-  check_resource(as, &as->bundle, res);
+  alloc_resource(as, &as->bundle, res);
   if (!(res & RES_ALES_25)) {
     E2kAlef1 syl;
     syl.i = 0;
@@ -468,7 +483,7 @@ static int emit_alopf11(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
 
 static void emit_cds(ASMState *as, int opc, int als, Reg pred, int inverted, MCode **p)
 {
-  int cds_idx = get_sylidx(as, &as->bundle, RES_CDS_ALL, RES_CDS_SHIFT);
+  int cds_idx = alloc_syllable(as, &as->bundle, RES_CDS_ALL, RES_CDS_SHIFT);
   E2kCDS syl;
   syl.i = 0;
   syl.fields.pred = (pred - RID_PRED0)|0x60;
@@ -598,7 +613,7 @@ typedef MCode *MCLabel;
 
 static void emit_ct(ASMState *as, Reg ctpr, Reg pred, int inverted, MCode **p)
 {
-  check_resource(as, &as->bundle, RES_SS); /* Uses only part of RES_SS */
+  alloc_resource(as, &as->bundle, RES_SS); /* Uses only part of RES_SS */
   E2kSS syl;
   syl.i = 0;
   if (pred) { /* RID_PREDX is nonnull  */
@@ -623,7 +638,7 @@ static void emit_call(ASMState *as, Reg ctpr, Reg pred,
                       int inverted, int wbs, MCode **p)
 {
   emit_ct(as, ctpr, pred, inverted, 0);
-  check_resource(as, &as->bundle, RES_CS1);
+  alloc_resource(as, &as->bundle, RES_CS1);
   E2kC1f1 syl;
   syl.i = 0;
   syl.fields.opc = E2K_CALL;
@@ -636,7 +651,7 @@ static void emit_call(ASMState *as, Reg ctpr, Reg pred,
 static void emit_copf2(ASMState *as, uint32_t opc, Reg ctpr,
                        uintptr_t disp, MCode **p)
 {
-  check_resource(as, &as->bundle, RES_CS0);
+  alloc_resource(as, &as->bundle, RES_CS0);
   E2kC0f2 syl;
   syl.i = 0;
   syl.fields.disp = disp >> 3;
@@ -684,7 +699,7 @@ static void emit_setr(ASMState *as, MCode **p,
                       int rsz, int rbs, int rcur,
                       int psz, int rpsz, int op)
 {
-    check_resource(as, &as->bundle, RES_CS1);
+    alloc_resource(as, &as->bundle, RES_CS1);
     E2kSetBR params;
     params.i = 0;
     params.fields.rsz = rsz;
