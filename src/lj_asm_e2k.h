@@ -3,6 +3,10 @@
 ** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
 */
 
+/* Environment variable names for e2k scheduler. */
+#define LJ_E2K_SCHED_DISABLE  "LJ_E2K_SCHED_DISABLE"
+#define LJ_E2K_SCHED_DEBUG    "LJ_E2K_SCHED_DEBUG"
+
 /* -- Register allocator extensions --------------------------------------- */
 
 static Reg ra_hintalloc(ASMState *as, IRRef ref, Reg hint, RegSet allow)
@@ -41,7 +45,8 @@ static void asm_guard(ASMState *as, Reg pred, int inverted)
 {
   MCode *target = asm_exitstub_addr(as);
   MCode *p = as->mcp;
-  if (LJ_UNLIKELY(p == as->invmcp)) {
+  /* Do not emit inverted loop guard if sched queue is not empty. */
+  if (!as->sched.tail && LJ_UNLIKELY(p == as->invmcp)) {
     as->invmcp = NULL;
     as->loopinv = 1;
     as->mcp = p + 4;
@@ -58,20 +63,18 @@ static void asm_guard(ASMState *as, Reg pred, int inverted)
 
 /* Marker to prevent patching the GC check exit. */
 /* ord 0x0, 0x0, empty.hi */
-#define E2K_NOPATCH_GC_CHECK    0x5c0c0df
+#define E2K_NOPATCH_GC_CHECK_SRC1 0
+#define E2K_NOPATCH_GC_CHECK E2K_CONTROL_OP(E2K_NOPATCH_GC_CHECK_SRC1, 0)
 
 /* Emit conditional branch to exit for gc check guard */
 static void asm_guard_gc(ASMState *as, Reg pred, int inverted)
 {
   MCode *target = asm_exitstub_addr(as);
-  MCode *p = as->mcp;
-  lj_assertA(p != as->invmcp, "unexpected GC check");
+  lj_assertA(as->mcp != as->invmcp, "unexpected GC check");
   emit_ibranch(as, target, pred, inverted);
   emit_snapno(as, as->snapno);
-  /* TODO: e2k: emit gc check marker */
-  emit_serialize(as);
   /* Keep in sync with E2K_NOPATCH_GC_CHECK */
-  bundle_alop(as, &as->mcp, 0, E2K_ORD, 0xc0, 0xc0, 0, 0xdf);
+  emit_control(as, E2K_NOPATCH_GC_CHECK_SRC1, 0);
 }
 
 /* -- Operand fusion ------------------------------------------------------ */
@@ -1483,11 +1486,8 @@ static MCode *e2k_lookup_ibranch(MCode *p) {
 static void asm_loop_fixup(ASMState *as)
 {
   MCode *p = as->mctop;
-  MCode *target;
+  MCode *target = emit_serialize(as);
 
-  emit_serialize(as);
-
-  target = as->mcp;
   p[-4] = E2K_NOP(4, 0);
   p[-3] = E2K_NOP_LOOP_PATCH;
   p[-2] = 0;
@@ -1507,6 +1507,8 @@ static void asm_loop_fixup(ASMState *as)
 
 static void asm_loop_tail_fixup(ASMState *as)
 {
+  lj_assertA(!as->sched.tail, "expect empty sched queue");
+
   if (as->loopinv) as->mctop -= 4;
 }
 
@@ -1525,7 +1527,8 @@ static void asm_head_root_base(ASMState *as)
       emit_movrr(as, 0, r, RID_BASE);
   }
 
-  emit_serialize(as);
+  /* TODO: sched: setwd/setbn */
+  emit_serializef(as, "setwd/setbn");
 
   /* setup jit window */
   bundle_window(as, JIT_WSZ, JIT_NFX, JIT_DBL,
@@ -1550,6 +1553,7 @@ static Reg asm_head_side_base(ASMState *as, IRIns *irp)
       emit_getgl(as, r, jit_base);  /* Otherwise reload BASE. */
     }
   }
+  emit_serialize(as);
   return RID_NONE;
 }
 
@@ -1563,7 +1567,7 @@ static void asm_tail_fixup(ASMState *as, TraceNo lnk)
   MCode *p = as->mctop;
   int32_t spadj = as->T->spadjust;
 
-  emit_serialize(as);
+  lj_assertA(!as->sched.tail, "expect empty sched queue");
 
   if (spadj) {
     p[-2] = E2K_NOP(2, 0);
@@ -1589,6 +1593,8 @@ static void asm_tail_prep(ASMState *as)
   /* initialized by zero, it counts as nop */
   as->mcp = as->mctop - 8;
   as->invmcp = as->loopref ? as->mcp : NULL;
+
+  sched_reset(as);
 }
 
 /* -- Trace setup --------------------------------------------------------- */
@@ -1612,8 +1618,15 @@ static Reg asm_setup_call_slots(ASMState *as, IRIns *ir, const CCallInfo *ci)
 /* Target-specific setup. */
 static void asm_setup_target(ASMState *as)
 {
+  const char *sched_disable = getenv(LJ_E2K_SCHED_DISABLE);
+  const char *sched_dbg = getenv(LJ_E2K_SCHED_DEBUG);
+
+  memset(&as->sched, 0, sizeof(as->sched));
+  /* Do not forget to preserve across sched_reset calls. */
+  as->sched.enable = !sched_disable ? E2K_SCHED : 0;
+  as->sched.dbg = sched_dbg ? 1 : 0;
+
   bundle_reset(&as->bundle);
-  sched_reset(as);
   asm_exitstub_setup(as);
 }
 

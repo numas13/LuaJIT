@@ -402,6 +402,7 @@ static void bundle_cds(ASMState *as, int opc, int als, Reg pred, int inverted,
 #define ISRC2(src2) bundle_src2(as, E2K_CONST, src2)
 #define RSRC2(src2) bundle_src2(as, E2K_REG, src2)
 #define RSRC3(src3) bundle_src3(as, E2K_REG, src3)
+#define RSRC4(src4) bundle_src3(as, E2K_REG, src4)
 #define RDST(dst)  bundle_dst(as, E2K_REG, dst)
 #define PDST(pred) bundle_pdst(as, E2K_REG_PRED, pred)
 #define bundle_alopf7_rr(as, spec, op, src1, src2, pred, p) \
@@ -563,101 +564,461 @@ static void bundle_setr(ASMState *as, MCode **p,
 #define bundle_window(as, wsz, nfx, dbl, rsz, rbs, rcur, p) \
   bundle_setr(as, p, wsz, nfx, dbl, rsz, rbs, rcur, 0, 0, E2K_SETWD|E2K_SETBN)
 
-/* -- Emit basic instructions --------------------------------------------- */
+/* -- E2K instruction scheduler ------------------------------------------- */
+
+#if 1
+static void sched_dbg_impl(ASMState *as, const char *file, int line,
+                           const char *func, const char *fmt, ...)
+{
+  va_list argp;
+  va_start(argp, fmt);
+#if 0
+  fprintf(stderr, "LuaJIT SCHED %s:%d: %s: ", file, line, func);
+#else
+  UNUSED(file);
+  UNUSED(line);
+  UNUSED(func);
+#endif
+  vfprintf(stderr, fmt, argp);
+  fputc('\n', stderr);
+  va_end(argp);
+}
+
+#define sched_dbg(as, fmt, ...) do { \
+    if ((as)->sched.dbg) \
+      sched_dbg_impl(as, __FILE__, __LINE__, __FUNCTION__, fmt, __VA_ARGS__); \
+  } while (0)
+#else
+#define sched_dbg(as, fmt, ...) ((void) 0)
+#endif
 
 static void sched_reset(ASMState *as)
 {
+  uint8_t saved_enable, saved_dbg;
+  E2kInsn *insn;
+
+  if (!as->sched.enable)
+    return;
+
+  saved_enable = as->sched.enable;
+  saved_dbg = as->sched.dbg;
+  /* Clean fresh start. */
   memset(&as->sched, 0, sizeof(as->sched));
+  as->sched.enable = saved_enable;
+  as->sched.dbg = saved_dbg;
+
+  /* Initialize free list of insns. */
+  insn = as->sched.free = as->sched.insn;
+  for (int i = 0; i < E2K_SCHED_WINDOW_SIZE; i++, insn++) {
+    insn->prev = i > 0 ? insn - 1 : NULL;
+    insn->next = i + 1 < E2K_SCHED_WINDOW_SIZE ? insn + 1 : NULL;
+  }
+
+  sched_dbg(as, "---- SCHED WINDOW SIZE %d", E2K_SCHED_WINDOW_SIZE);
 }
 
-static void emit_serialize(ASMState *as)
+static void sched_remove(ASMState *as, E2kInsn *insn)
 {
-  /* TODO: */
+  /* Remove insn from the list. */
+  if (as->sched.head == insn)
+    as->sched.head = insn->next;
+  if (as->sched.tail == insn)
+    as->sched.tail = insn->prev;
+  if (insn->next)
+    insn->next->prev = insn->prev;
+  if (insn->prev)
+    insn->prev->next = insn->next;
+
+  /* Add insn to the free list. */
+  insn->next = as->sched.free;
+  if (insn->next)
+    insn->next->prev = insn;
+  insn->prev = NULL;
+  as->sched.free = insn;
 }
 
-#define emit_alopf7_rr(as, spec, op, src1, src2, pred) \
-  emit_serialize(as); \
-  bundle_alopf7_rr(as, spec, op, src1, src2, pred, &(as)->mcp)
-#define emit_alopf7_ri(as, spec, op, src1, src2, pred) \
-  emit_serialize(as); \
-  bundle_alopf7_ri(as, spec, op, src1, src2, pred, &(as)->mcp)
-#define emit_alopf3_ri(as, spec, op, src1, src2, src3) \
-  emit_serialize(as); \
-  bundle_alopf3_ri(as, spec, op, src1, src2, src3, &(as)->mcp)
-#define emit_alopf12_i(as, spec, op, src2, dst) \
-  emit_serialize(as); \
-  bundle_alopf12_i(as, spec, op, src2, dst, &(as)->mcp)
-#define emit_alopf12_r(as, spec, op, src2, dst) \
-  emit_serialize(as); \
-  bundle_alopf12_r(as, spec, op, src2, dst, &(as)->mcp)
-#define emit_alopf2_r_rlp(as, spec, op, src2, dst, pred, inv) \
-  emit_serialize(as); \
-  bundle_rlp(as, bundle_alopf2_r(as, spec, op, src2, dst, 0), \
-             pred, inv, &(as)->mcp)
-#define emit_alopf2_i(as, spec, op, src2, dst) \
-  emit_serialize(as); \
-  bundle_alopf2_i(as, spec, op, src2, dst, &(as)->mcp)
-#define emit_alopf2_r(as, spec, op, src2, dst) \
-  emit_serialize(as); \
-  bundle_alopf2_r(as, spec, op, src2, dst, &(as)->mcp)
-#define emit_alopf21_rrr(as, spec, op, src1, src2, src3, dst) \
-  emit_serialize(as); \
-  bundle_alopf21_rrr(as, spec, op, src1, src2, src3, dst, &(as)->mcp)
-#define emit_alopf11_rr(as, spec, op, src1, src2, dst) \
-  emit_serialize(as); \
-  bundle_alopf11_rr(as, spec, op, src1, src2, dst, &(as)->mcp)
-#define emit_alopf11_ir(as, spec, op, src1, src2, dst) \
-  emit_serialize(as); \
-  bundle_alopf11_ir(as, spec, op, src1, src2, dst, &(as)->mcp)
-#define emit_alopf11_ri(as, spec, op, src1, src2, dst) \
-  emit_serialize(as); \
-  bundle_alopf11_ri(as, spec, op, src1, src2, dst, &(as)->mcp)
-#define emit_alopf11_ii(as, spec, op, src1, src2, dst) \
-  emit_serialize(as); \
-  bundle_alopf11_ii(as, spec, op, src1, src2, dst, &(as)->mcp)
-#define emit_alopf1_rr(as, spec, op, src1, src2, dst) \
-  emit_serialize(as); \
-  bundle_alopf1_rr(as, spec, op, src1, src2, dst, &(as)->mcp)
-#define emit_alopf1_rr_mrgc(as, spec, op, src1, src2, dst, pred, inv) \
-  emit_serialize(as); \
-  bundle_mrgc(as, bundle_alopf1_rr(as, spec, op, src1, src2, dst, 0), \
-              pred, inv, &(as)->mcp)
-#define emit_alopf1_ri_rlp(as, spec, op, src1, src2, dst, pred, inv) \
-  emit_serialize(as); \
-  bundle_rlp(as, bundle_alopf1_ri(as, spec, op, src1, src2, dst, 0), \
-             pred, inv, &(as)->mcp)
-#define emit_alopf1_ir(as, spec, op, src1, src2, dst) \
-  emit_serialize(as); \
-  bundle_alopf1_ir(as, spec, op, src1, src2, dst, &(as)->mcp)
-#define emit_alopf1_ri(as, spec, op, src1, src2, dst) \
-  emit_serialize(as); \
-  bundle_alopf1_ri(as, spec, op, src1, src2, dst, &(as)->mcp)
-#define emit_alopf1_ii(as, spec, op, src1, src2, dst) \
-  emit_serialize(as); \
-  bundle_alopf1_ii(as, spec, op, src1, src2, dst, &(as)->mcp)
-#define emit_snapno(as, snapno) \
-  emit_serialize(as); \
-  bundle_snapno(as, snapno, &(as)->mcp)
+/* Emit a single insn from the sched queue.  */
+static int sched_emit_single_insn(ASMState *as, const char *reason)
+{
+  E2kInsn *insn = as->sched.tail;
+  int als_idx;
 
-#define emit_disp(as, ctpr, target) \
-  emit_serialize(as); \
-  bundle_disp(as, ctpr, target, &(as)->mcp)
+  if (!insn)
+    return 0;
 
-#define emit_prepcall(as, ctpr, target) \
-  emit_serialize(as); \
-  bundle_prepcall(as, ctpr, target, &(as)->mcp)
+  switch (insn->op) {
+  case E2K_INSN_DISP:
+    bundle_disp(as, insn->disp.ctpr, insn->disp.target, &as->mcp);
+    break;
+  case E2K_INSN_PREPCALL:
+    bundle_prepcall(as, insn->disp.ctpr, insn->disp.target, &as->mcp);
+    break;
+  case E2K_INSN_CT:
+    bundle_ct(as, insn->ct.ctpr, insn->ct.pred, insn->ct.inverted, &as->mcp);
+    break;
+  case E2K_INSN_IBRANCH:
+    bundle_ibranch(as, insn->ibranch.target, insn->ibranch.pred,
+                   insn->ibranch.inverted, &as->mcp);
+    break;
+  case E2K_INSN_CALL:
+    bundle_call(as, insn->call.ctpr, insn->call.pred, insn->call.inverted,
+                insn->call.wbs, &as->mcp);
+    break;
+  default:
+    lj_assertA(insn->op < E2K_ALOP_END, "unimplemented emit %s", e2kop[insn->op].name);
 
-#define emit_ct(as, ctpr, pred, inverted) \
-  emit_serialize(as); \
-  bundle_ct(as, ctpr, pred, inverted, &(as)->mcp)
+    if (insn->alop.flags & ALOP_SRC1_GPR)
+      insn->alop.src1 = RSRC1(insn->alop.src1);
 
-#define emit_ibranch(as, target, pred, inverted) \
-  emit_serialize(as); \
-  bundle_ibranch(as, target, pred, inverted, &(as)->mcp)
+    if (insn->alop.flags & ALOP_SRC2_GPR)
+      insn->alop.src2 = RSRC2(insn->alop.src2);
+    else if (insn->alop.flags & ALOP_SRC2_LIT)
+      insn->alop.src2 = ISRC2(insn->alop.literal);
 
-#define emit_call(as, ctpr, pred, inverted, wbs) \
-  emit_serialize(as); \
-  bundle_call(as, ctpr, pred, inverted, wbs, &(as)->mcp)
+    if (insn->alop.flags & ALOP_SRC3_GPR)
+      insn->alop.src3 = RSRC3(insn->alop.src3);
+
+    if (insn->alop.flags & ALOP_DST_GPR)
+      insn->alop.dst = RDST(insn->alop.dst);
+    else if (insn->alop.flags & ALOP_DST_PRED)
+      insn->alop.dst = PDST(insn->alop.dst);
+    else if (insn->alop.flags & ALOP_SRC4_GPR)
+      insn->alop.dst = RSRC4(insn->alop.src4);
+
+    als_idx = bundle_alop(as, 0, (insn->alop.flags & ALOP_SPEC) != 0,
+                          insn->op, insn->alop.src1, insn->alop.src2,
+                          insn->alop.src3, insn->alop.dst);
+
+    if (insn->alop.cond) {
+      bundle_rlp(as, als_idx, insn->alop.cond,
+                 insn->alop.flags & ALOP_COND_INV ? 1 : 0, 0);
+    }
+
+    if (insn->alop.mrgc) {
+      bundle_mrgc(as, als_idx, insn->alop.mrgc,
+                  insn->alop.flags & ALOP_MRGC_INV ? 1 : 0, 0);
+    }
+
+    bundle_finalize(as, &as->mcp);
+    break;
+  }
+
+  if (reason)
+    sched_dbg(as, "%08lx: %-12s --- %s ---", (uintptr_t) as->mcp,
+              e2kop[insn->op].name, reason);
+  else
+    sched_dbg(as, "%08lx: %s", (uintptr_t) as->mcp, e2kop[insn->op].name);
+
+  sched_remove(as, insn);
+  return 1;
+}
+
+static int sched_emit_bundle(ASMState *as, const char *reason)
+{
+  return sched_emit_single_insn(as, reason);
+}
+
+static MCode *emit_serializef(ASMState *as, const char *reason)
+{
+  if (as->sched.enable && as->sched.tail) {
+    reason = reason ? reason : "unknown";
+    sched_dbg(as, "---- SERIALIZE START (%s)", reason);
+    /* Write all pending insns to memory. */
+    while (sched_emit_bundle(as, NULL));
+    // sched_dbg(as, "---- SERIALIZE END (%s)", reason);
+  }
+  return as->mcp;
+}
+
+#define emit_serialize(as) emit_serializef(as, __FUNCTION__)
+
+static E2kInsn *sched_alloc(ASMState *as, int op)
+{
+  E2kInsn *insn;
+
+  /* Emit one bundle if these is no free insn. */
+  if (!as->sched.free)
+    sched_emit_bundle(as, "OVERFLOW");
+
+  /* Take insn from free list. */
+  insn = as->sched.free;
+  lj_assertA(insn, "expect free insn");
+  if (insn->next)
+    as->sched.free->prev = NULL;
+  as->sched.free = insn->next;
+
+  /* Initialize insn. */
+  memset(insn, 0, sizeof(*insn));
+
+  if (as->sched.head) {
+    /* This insn is a new head. */
+    insn->next = as->sched.head;
+    insn->next->prev = insn;
+  } else {
+    /* List is empty. */
+    as->sched.tail = insn;
+  }
+  as->sched.head = insn;
+  insn->op = op;
+  return insn;
+}
+
+/* -- Emit basic instructions --------------------------------------------- */
+
+static E2kInsn *emit_alop(ASMState *as, int spec, E2kAlopFlags flags, uint32_t op,
+                          int src1, int src2, int src3, int dst)
+{
+  E2kInsn *insn = sched_alloc(as, op);
+  if (spec) flags |= ALOP_SPEC;
+  insn->alop.flags = flags;
+  insn->alop.src1 = src1;
+  insn->alop.src2 = src2;
+  insn->alop.src3 = src3;
+  insn->alop.dst = dst;
+  return insn;
+}
+
+static E2kInsn *emit_alop_i(ASMState *as, int spec, E2kAlopFlags flags, uint32_t op,
+                            int src1, int64_t src2, int src3, int dst)
+{
+  E2kInsn *insn;
+  if (get_const_type(src2) != E2K_CONST4) {
+    flags |= ALOP_SRC2_LIT;
+    insn = emit_alop(as, spec, flags, op, src1, 0, src3, dst);
+    insn->alop.literal = src2;
+  } else {
+    insn = emit_alop(as, spec, flags, op, src1, src2 | 0xc0, src3, dst);
+  }
+  return insn;
+}
+
+static void emit_alopf7_rr(ASMState *as, int spec, uint32_t op, int src1,
+                           int src2, int pdst)
+{
+  if (as->sched.enable) {
+    int flags = ALOP_SRC1_GPR | ALOP_SRC2_GPR | ALOP_DST_PRED;
+    emit_alop(as, spec, flags, op, src1, src2, 0, pdst);
+  } else
+    bundle_alopf7_rr(as, spec, op, src1, src2, pdst, &as->mcp);
+}
+
+static void emit_alopf7_ri(ASMState *as, int spec, uint32_t op, int src1,
+                           int64_t src2, int pdst)
+{
+  if (as->sched.enable) {
+    int flags = ALOP_SRC1_GPR | ALOP_DST_PRED;
+    emit_alop_i(as, spec, flags, op, src1, src2, 0, pdst);
+  } else
+    bundle_alopf7_ri(as, spec, op, src1, src2, pdst, &as->mcp);
+}
+
+static void emit_alopf3_ri(ASMState *as, int spec, uint32_t op, int src1,
+                           int64_t src2, int src4)
+{
+  if (as->sched.enable) {
+    int flags = ALOP_SRC1_GPR | ALOP_SRC4_GPR;
+    emit_alop_i(as, spec, flags, op, src1, src2, 0, src4);
+  } else
+    bundle_alopf3_ri(as, spec, op, src1, src2, src4, &as->mcp);
+}
+
+#define emit_alopf12_i emit_alopf2_i
+#define emit_alopf12_r emit_alopf2_r
+
+static void emit_alopf2_r_rlp(ASMState *as, int spec, uint32_t op, int src2,
+                              int dst, int pred, int inv)
+{
+  if (as->sched.enable) {
+    int flags = ALOP_SRC2_GPR | ALOP_DST_GPR;
+    if (inv) flags |= ALOP_COND_INV;
+    emit_alop(as, spec, flags, op, 0, src2, 0, dst)
+      ->alop.cond = pred;
+  } else {
+    int als_idx = bundle_alopf2_r(as, spec, op, src2, dst, 0);
+    bundle_rlp(as, als_idx, pred, inv, &as->mcp);
+  }
+}
+
+static void emit_alopf2_i(ASMState *as, int spec, uint32_t op, int64_t src2,
+                          int dst)
+{
+  if (as->sched.enable) {
+    int flags = ALOP_DST_GPR;
+    emit_alop_i(as, spec, flags, op, 0, src2, 0, dst);
+  } else
+    bundle_alopf2_i(as, spec, op, src2, dst, &as->mcp);
+}
+
+static void emit_alopf2_r(ASMState *as, int spec, uint32_t op, int src2,
+                          int dst)
+{
+  if (as->sched.enable) {
+    int flags = ALOP_SRC2_GPR | ALOP_DST_GPR;
+    emit_alop(as, spec, flags, op, 0, src2, 0, dst);
+  } else
+    bundle_alopf2_r(as, spec, op, src2, dst, &as->mcp);
+}
+
+static void emit_alopf21_rrr(ASMState *as, int spec, uint32_t op, int src1,
+                             int src2, int src3, int dst)
+{
+  if (as->sched.enable) {
+    int flags = ALOP_SRC1_GPR | ALOP_SRC2_GPR | ALOP_SRC3_GPR | ALOP_DST_GPR;
+    emit_alop(as, spec, flags, op, src1, src2, src3, dst);
+  } else
+    bundle_alopf21_rrr(as, spec, op, src1, src2, src3, dst, &as->mcp);
+}
+
+#define emit_alopf11_rr emit_alopf1_rr
+#define emit_alopf11_ir emit_alopf1_ir
+#define emit_alopf11_ri emit_alopf1_ri
+#define emit_alopf11_ii emit_alopf1_ii
+
+static void emit_alopf1_rr(ASMState *as, int spec, uint32_t op, int src1,
+                           int src2, int dst)
+{
+  if (as->sched.enable) {
+    int flags = ALOP_SRC1_GPR | ALOP_SRC2_GPR | ALOP_DST_GPR;
+    emit_alop(as, spec, flags, op, src1, src2, 0, dst);
+  } else
+    bundle_alopf1_rr(as, spec, op, src1, src2, dst, &as->mcp);
+}
+
+static void emit_alopf1_rr_mrgc(ASMState *as, int spec, uint32_t op, int src1,
+                                int src2, int dst, int pred, int inv)
+{
+  if (as->sched.enable) {
+    int flags = ALOP_SRC1_GPR | ALOP_SRC2_GPR | ALOP_DST_GPR;
+    if (inv) flags |= ALOP_MRGC_INV;
+    emit_alop(as, spec, flags, op, src1, src2, 0, dst)
+      ->alop.mrgc = pred;
+  } else {
+    int als_idx = bundle_alopf1_rr(as, spec, op, src1, src2, dst, 0);
+    bundle_mrgc(as, als_idx, pred, inv, &as->mcp);
+  }
+}
+
+static void emit_alopf1_ri_rlp(ASMState *as, int spec, uint32_t op, int src1,
+                               int64_t src2, int dst, int pred, int inv)
+{
+  if (as->sched.enable) {
+    int flags = ALOP_SRC1_GPR | ALOP_DST_GPR;
+    if (inv) flags |= ALOP_COND_INV;
+    emit_alop_i(as, spec, flags, op, src1, src2, 0, dst)
+      ->alop.cond = pred;
+  } else {
+    int als_idx = bundle_alopf1_ri(as, spec, op, src1, src2, dst, 0);
+    bundle_rlp(as, als_idx, pred, inv, &as->mcp);
+  }
+}
+
+static void emit_alopf1_ir(ASMState *as, int spec, uint32_t op, uint8_t src1,
+                           int src2, int dst)
+{
+  if (as->sched.enable) {
+    int flags = ALOP_SRC2_GPR | ALOP_DST_GPR;
+    emit_alop(as, spec, flags, op, ISRC1(src1), src2, 0, dst);
+  } else
+    bundle_alopf1_ir(as, spec, op, src1, src2, dst, &as->mcp);
+}
+
+static void emit_alopf1_ri(ASMState *as, int spec, uint32_t op, int src1,
+                           int64_t src2, int dst)
+{
+  if (as->sched.enable) {
+    int flags = ALOP_SRC1_GPR | ALOP_DST_GPR;
+    emit_alop_i(as, spec, flags, op, src1, src2, 0, dst);
+  } else
+    bundle_alopf1_ri(as, spec, op, src1, src2, dst, &as->mcp);
+}
+
+static void emit_alopf1_ii(ASMState *as, int spec, uint32_t op, uint8_t src1,
+                           int64_t src2, int dst)
+{
+  if (as->sched.enable) {
+    int flags = ALOP_DST_GPR;
+    emit_alop_i(as, spec, flags, op, ISRC1(src1), src2, 0, dst);
+  } else
+    bundle_alopf1_ii(as, spec, op, src1, src2, dst, &as->mcp);
+}
+
+static void emit_snapno(ASMState *as, uint64_t snapno)
+{
+  emit_alopf1_ii(as, 0, E2K_ADDD,
+                 snapno < 32 ? snapno : 31,
+                 snapno < 32 ? 0 : snapno - 31, RID_TMP);
+}
+
+/* ord uimm5, uimm4, empty.hi */
+#define E2K_CONTROL_OP(src1, src2) \
+  (0x50000df \
+   | ((uint32_t) (((src1) & 31) | 0xc0) << 16) \
+   | ((uint32_t) (((src2) & 15) | 0xc0) << 8))
+
+static void emit_control(ASMState *as, uint8_t src1, uint8_t src2)
+{
+  lj_assertA(src1 < 32, "invalid src1");
+  lj_assertA(src2 < 16, "invalid src2");
+  if (as->sched.enable)
+    emit_alop(as, 0, 0, E2K_ORD, ISRC1(src1), ISRC2(src2), 0, 0xdf);
+  else
+    bundle_alop(as, &as->mcp, 0, E2K_ORD, ISRC1(src1), ISRC2(src2), 0, 0xdf);
+}
+
+static void emit_disp(ASMState *as, Reg ctpr, MCode *target)
+{
+  if (as->sched.enable) {
+    E2kInsn *insn = sched_alloc(as, E2K_INSN_DISP);
+    insn->disp.ctpr = ctpr;
+    insn->disp.target = target;
+  } else
+    bundle_disp(as, ctpr, target, &as->mcp);
+}
+
+static void emit_prepcall(ASMState *as, Reg ctpr, ASMFunction target)
+{
+  if (as->sched.enable) {
+    E2kInsn *insn = sched_alloc(as, E2K_INSN_PREPCALL);
+    insn->disp.ctpr = ctpr;
+    insn->disp.target = target;
+  } else
+    bundle_prepcall(as, ctpr, target, &as->mcp);
+}
+
+static void emit_ct(ASMState *as, Reg ctpr, Reg pred, int inverted)
+{
+  if (as->sched.enable) {
+    E2kInsn *insn = sched_alloc(as, E2K_INSN_CT);
+    insn->ct.ctpr = ctpr;
+    insn->ct.pred = pred;
+    insn->ct.inverted = inverted;
+  } else
+    bundle_ct(as, ctpr, pred, inverted, &as->mcp);
+}
+
+static void emit_ibranch(ASMState *as, MCode *target, Reg pred,
+                         int inverted)
+{
+  if (as->sched.enable) {
+    E2kInsn *insn = sched_alloc(as, E2K_INSN_IBRANCH);
+    insn->ibranch.target = target;
+    insn->ibranch.pred = pred;
+    insn->ibranch.inverted = inverted;
+  } else
+    bundle_ibranch(as, target, pred, inverted, &as->mcp);
+}
+
+static void emit_call(ASMState *as, Reg ctpr, Reg pred, int inverted, int wbs)
+{
+  if (as->sched.enable) {
+    E2kInsn *insn = sched_alloc(as, E2K_INSN_CALL);
+    insn->call.ctpr = ctpr;
+    insn->call.pred = pred;
+    insn->call.inverted = inverted;
+    insn->call.wbs = wbs;
+  } else
+    bundle_call(as, ctpr, pred, inverted, wbs, &as->mcp);
+}
 
 /* -- Emit loads/stores --------------------------------------------------- */
 
@@ -711,8 +1072,7 @@ typedef MCode *MCLabel;
 /* Return label pointing to current PC. */
 static MCLabel emit_label(ASMState *as)
 {
-  emit_serialize(as);
-  return as->mcp;
+  return emit_serialize(as);
 }
 
 static void emit_jmp(ASMState *as, MCode *target)

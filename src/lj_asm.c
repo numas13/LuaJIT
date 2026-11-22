@@ -138,8 +138,12 @@ typedef struct ASMState {
 
 /* Sparse limit checks using a red zone before the actual limit. */
 /* HREFK on e2k is 66 bytes, increase redzone twice */
-#ifdef __e2k__
-#define MCLIM_REDZONE 128
+#if LJ_TARGET_E2K
+# if E2K_SCHED
+#  define MCLIM_REDZONE	(24 * E2K_SCHED_WINDOW_SIZE)
+# else
+#  define MCLIM_REDZONE	66
+# endif
 #else
 #define MCLIM_REDZONE	64
 #endif
@@ -1081,6 +1085,9 @@ static void asm_snap_prep(ASMState *as)
 static void asm_snap_prev(ASMState *as)
 {
   if (as->curins < as->snapref) {
+#if LJ_TARGET_E2K
+    emit_serialize(as);
+#endif
     uintptr_t ofs = (uintptr_t)(as->mctoporig - as->mcp);
     if (ofs >= 0x10000) lj_trace_err(as->J, LJ_TRERR_MCODEOV);
     do {
@@ -2590,6 +2597,9 @@ void lj_asm_trace(jit_State *J, GCtrace *T)
       asm_ir(as, ir);
     }
 
+#if LJ_TARGET_E2K
+    emit_serialize(as);
+#endif
     if (as->realign && J->curfinal->nins >= T->nins)
       continue;  /* Retry in case only the MCode needs to be realigned. */
 
@@ -2631,6 +2641,10 @@ void lj_asm_trace(jit_State *J, GCtrace *T)
   RA_DBG_FLUSH();
   if (as->freeset != RSET_ALL)
     lj_trace_err(as->J, LJ_TRERR_BADRA);  /* Ouch! Should never happen. */
+
+#if LJ_TARGET_E2K
+  emit_serialize(as);
+#endif
 
   /* Set trace entry point before fixing up tail to allow link to self. */
   T->mcode = as->mcp;

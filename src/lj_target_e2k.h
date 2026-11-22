@@ -340,9 +340,76 @@ typedef enum {
 
 /* -- Scheduler ----------------------------------------------------------- */
 
+#define E2K_SCHED 1
+
+typedef struct E2kInsn E2kInsn;
+
+typedef enum E2kAlopFlags {
+  ALOP_NONE       = 0,
+  ALOP_SPEC       = 1u << 0,
+  ALOP_SRC1_GPR   = 1u << 1,
+  ALOP_SRC2_GPR   = 1u << 2,
+  ALOP_SRC2_LIT   = 1u << 3,
+  ALOP_SRC3_GPR   = 1u << 4,
+  ALOP_SRC4_GPR   = 1u << 5,
+  ALOP_DST_GPR    = 1u << 6,
+  ALOP_DST_PRED   = 1u << 7,
+  ALOP_COND_INV   = 1u << 8,
+  ALOP_MRGC_INV   = 1u << 9,
+} E2kAlopFlags;
+
+struct E2kInsn {
+  E2kInsn *next;
+  E2kInsn *prev;
+  uint32_t op;
+  union {
+    struct {
+      uint64_t literal;
+      /* E2kAlopFlags */
+      uint16_t flags;
+      uint16_t src1;
+      uint16_t src2;
+      uint16_t src3;
+      union {
+        uint16_t src4;
+        uint16_t dst;
+      };
+      uint16_t cond;
+      uint16_t mrgc;
+    } alop;
+    struct {
+      void *target;
+      int ctpr;
+    } disp;
+    struct {
+      int ctpr;
+      int pred;
+      uint8_t inverted;
+    } ct;
+    struct {
+      void *target;
+      int pred;
+      uint8_t inverted;
+    } ibranch;
+    struct {
+      int ctpr;
+      int pred;
+      uint8_t inverted;
+      uint8_t wbs;
+    } call;
+  };
+};
+
+#define E2K_SCHED_WINDOW_SIZE 32
+
 typedef struct E2kSched {
-  /* TODO: e2k scheduler */
-  int empty;
+  uint8_t enable;
+  uint8_t dbg;
+  int cycle;
+  E2kInsn *head;
+  E2kInsn *tail;
+  E2kInsn *free;
+  E2kInsn insn[E2K_SCHED_WINDOW_SIZE];
 } E2kSched;
 
 /* -- Opcodes ------------------------------------------------------------- */
@@ -424,8 +491,14 @@ enum {
   /* ------------------------------------------------- */
   E2K_FDTOIFD,
   /* ------------------------------------------------- */
-  E2K_PSHUFB
+  E2K_PSHUFB,
   /* ------------------------------------------------- */
+  E2K_ALOP_END,
+  E2K_INSN_DISP,
+  E2K_INSN_PREPCALL,
+  E2K_INSN_CT,
+  E2K_INSN_IBRANCH,
+  E2K_INSN_CALL
 };
 
 static const E2kOp e2kop[] = {
@@ -536,6 +609,12 @@ static const E2kOp e2kop[] = {
 /* --------------------------------------------------- */
   { "PSHUFB",   RES_ALS_0134,   0x0f00, 0x4d000000 },
 /* --------------------------------------------------- */
+  { "",         RES_NONE,       0x0000, 0x00000000 },
+  { "DISP",     RES_NONE,       0x0000, 0x00000000 },
+  { "PREPCALL", RES_NONE,       0x0000, 0x00000000 },
+  { "CT",       RES_NONE,       0x0000, 0x00000000 },
+  { "IBRANCH",  RES_NONE,       0x0000, 0x00000000 },
+  { "CALL",     RES_NONE,       0x0000, 0x00000000 },
 };
 
 #endif
