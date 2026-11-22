@@ -584,12 +584,12 @@ static void sched_dbg_impl(ASMState *as, const char *file, int line,
   va_end(argp);
 }
 
-#define sched_dbg(as, fmt, ...) do { \
+#define sched_dbg(as, ...) do { \
     if ((as)->sched.dbg) \
-      sched_dbg_impl(as, __FILE__, __LINE__, __FUNCTION__, fmt, __VA_ARGS__); \
+      sched_dbg_impl(as, __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__); \
   } while (0)
 #else
-#define sched_dbg(as, fmt, ...) ((void) 0)
+#define sched_dbg(as, ...) ((void) 0)
 #endif
 
 static void sched_reset(ASMState *as)
@@ -637,11 +637,112 @@ static void sched_remove(ASMState *as, E2kInsn *insn)
   as->sched.free = insn;
 }
 
+static const char *sched_reg_name(int rid)
+{
+#define E2K_RIDNAME(name) #name,
+  static const char *const regname[] = {
+    GPRDEF(E2K_RIDNAME)
+    FPRDEF(E2K_RIDNAME)
+    VRIDDEF(E2K_RIDNAME)
+    NULL,
+    NGPRDEF(E2K_RIDNAME)
+  };
+
+  switch(rid) {
+  case RID_TMP1:
+    return "TMP1";
+  case RID_TMP2:
+    return "TMP2";
+  case RID_TMP3:
+    return "TMP3";
+  case RID_TMP4:
+    return "TMP4";
+  case RID_BASE:
+    return "BASE";
+  case RID_SP:
+    return "SP";
+  case RID_LPC:
+    return "LPC";
+  case RID_DISPATCH:
+    return "DISPATCH";
+  default:
+    return regname[rid];
+  }
+}
+
+static void sched_dump_cond(int pred, int inv)
+{
+  if (pred)
+    fprintf(stderr, " ? %s%s", inv ? "~" : "", sched_reg_name(pred));
+}
+
+static void sched_dump_insn(ASMState *as, E2kInsn *insn)
+{
+  fprintf(stderr, "%-12s ", e2kop[insn->op].name);
+
+  switch (insn->op) {
+  case E2K_INSN_DISP:
+  case E2K_INSN_PREPCALL:
+    fprintf(stderr, "%s %p", sched_reg_name(insn->disp.ctpr),
+            insn->disp.target);
+    break;
+  case E2K_INSN_CT:
+    fprintf(stderr, "%s", sched_reg_name(insn->ct.ctpr));
+    sched_dump_cond(insn->ct.pred, insn->ct.inverted);
+    break;
+  case E2K_INSN_IBRANCH:
+    fprintf(stderr, "%p", insn->ibranch.target);
+    sched_dump_cond(insn->ibranch.pred, insn->ibranch.inverted);
+    break;
+  case E2K_INSN_CALL:
+    fprintf(stderr, "%s, wbs=%d", sched_reg_name(insn->call.ctpr),
+            insn->call.wbs);
+    sched_dump_cond(insn->call.pred, insn->call.inverted);
+    break;
+  default:
+    lj_assertA(insn->op < E2K_ALOP_END, "unimplemented dump %s",
+               e2kop[insn->op].name);
+
+    if (insn->alop.flags & ALOP_SRC1_GPR)
+      fprintf(stderr, "%s", sched_reg_name(insn->alop.src1));
+    else
+      fprintf(stderr, "%d", insn->alop.src1 & 31);
+
+    if (insn->alop.flags & ALOP_SRC2_GPR)
+      fprintf(stderr, ", %s", sched_reg_name(insn->alop.src2));
+    else if (insn->alop.flags & ALOP_SRC2_LIT)
+      fprintf(stderr, ", 0x%llx", (long long) insn->alop.literal);
+    else
+      fprintf(stderr, ", %d", insn->alop.src2 & 15);
+
+    if (insn->alop.flags & ALOP_SRC3_GPR)
+      fprintf(stderr, ", %s", sched_reg_name(insn->alop.src3));
+    else
+      fprintf(stderr, ", 0x%x", insn->alop.src3);
+
+    if (insn->alop.flags & (ALOP_DST_GPR | ALOP_DST_PRED | ALOP_SRC4_GPR))
+      fprintf(stderr, ", %s", sched_reg_name(insn->alop.dst));
+    else
+      fprintf(stderr, ", %#x", insn->alop.dst);
+
+    if (insn->alop.mrgc) {
+      fprintf(stderr, ", %s%s",
+              insn->alop.flags & ALOP_MRGC_INV ? "~" : "",
+              sched_reg_name(insn->alop.mrgc));
+    }
+
+    if (insn->alop.cond) {
+      sched_dump_cond(insn->alop.cond, insn->alop.flags & ALOP_COND_INV);
+    }
+    break;
+  }
+}
+
 /* Emit a single insn from the sched queue.  */
-static int sched_emit_single_insn(ASMState *as, const char *reason)
+static int sched_emit_single_insn(ASMState *as)
 {
   E2kInsn *insn = as->sched.tail;
-  int als_idx;
+  int als_idx, src1, src2, src3, dst;
 
   if (!insn)
     return 0;
@@ -668,26 +769,33 @@ static int sched_emit_single_insn(ASMState *as, const char *reason)
     lj_assertA(insn->op < E2K_ALOP_END, "unimplemented emit %s", e2kop[insn->op].name);
 
     if (insn->alop.flags & ALOP_SRC1_GPR)
-      insn->alop.src1 = RSRC1(insn->alop.src1);
+      src1 = RSRC1(insn->alop.src1);
+    else
+      src1 = insn->alop.src1;
 
     if (insn->alop.flags & ALOP_SRC2_GPR)
-      insn->alop.src2 = RSRC2(insn->alop.src2);
+      src2 = RSRC2(insn->alop.src2);
     else if (insn->alop.flags & ALOP_SRC2_LIT)
-      insn->alop.src2 = ISRC2(insn->alop.literal);
+      src2 = ISRC2(insn->alop.literal);
+    else
+      src2 = insn->alop.src2;
 
     if (insn->alop.flags & ALOP_SRC3_GPR)
-      insn->alop.src3 = RSRC3(insn->alop.src3);
+      src3 = RSRC3(insn->alop.src3);
+    else
+      src3 = insn->alop.src3;
 
     if (insn->alop.flags & ALOP_DST_GPR)
-      insn->alop.dst = RDST(insn->alop.dst);
+      dst = RDST(insn->alop.dst);
     else if (insn->alop.flags & ALOP_DST_PRED)
-      insn->alop.dst = PDST(insn->alop.dst);
+      dst = PDST(insn->alop.dst);
     else if (insn->alop.flags & ALOP_SRC4_GPR)
-      insn->alop.dst = RSRC4(insn->alop.src4);
+      dst = RSRC4(insn->alop.src4);
+    else
+      dst = insn->alop.dst;
 
     als_idx = bundle_alop(as, 0, (insn->alop.flags & ALOP_SPEC) != 0,
-                          insn->op, insn->alop.src1, insn->alop.src2,
-                          insn->alop.src3, insn->alop.dst);
+                          insn->op, src1, src2, src3, dst);
 
     if (insn->alop.cond) {
       bundle_rlp(as, als_idx, insn->alop.cond,
@@ -703,29 +811,33 @@ static int sched_emit_single_insn(ASMState *as, const char *reason)
     break;
   }
 
-  if (reason)
-    sched_dbg(as, "%08lx: %-12s --- %s ---", (uintptr_t) as->mcp,
-              e2kop[insn->op].name, reason);
-  else
-    sched_dbg(as, "%08lx: %s", (uintptr_t) as->mcp, e2kop[insn->op].name);
+  if (as->sched.dbg) {
+    fprintf(stderr, "%08lx: ", (uintptr_t) as->mcp);
+    sched_dump_insn(as, insn);
+    fputc('\n', stderr);
+  }
 
   sched_remove(as, insn);
   return 1;
 }
 
-static int sched_emit_bundle(ASMState *as, const char *reason)
+static int sched_emit_bundle(ASMState *as)
 {
-  return sched_emit_single_insn(as, reason);
+  return sched_emit_single_insn(as);
 }
 
 static MCode *emit_serializef(ASMState *as, const char *reason)
 {
   if (as->sched.enable && as->sched.tail) {
-    reason = reason ? reason : "unknown";
-    sched_dbg(as, "---- SERIALIZE START (%s)", reason);
+    if (reason)
+      sched_dbg(as, "---- SERIALIZE START (%s)", reason);
+    else
+      sched_dbg(as, "---- SERIALIZE START");
+
     /* Write all pending insns to memory. */
-    while (sched_emit_bundle(as, NULL));
-    // sched_dbg(as, "---- SERIALIZE END (%s)", reason);
+    while (sched_emit_bundle(as));
+
+    as->sched.overflow = 0;
   }
   return as->mcp;
 }
@@ -737,8 +849,13 @@ static E2kInsn *sched_alloc(ASMState *as, int op)
   E2kInsn *insn;
 
   /* Emit one bundle if these is no free insn. */
-  if (!as->sched.free)
-    sched_emit_bundle(as, "OVERFLOW");
+  if (!as->sched.free) {
+    if (!as->sched.overflow) {
+      sched_dbg(as, "---- OVERFLOW START");
+      as->sched.overflow = 1;
+    }
+    sched_emit_bundle(as);
+  }
 
   /* Take insn from free list. */
   insn = as->sched.free;

@@ -405,6 +405,7 @@ struct E2kInsn {
 typedef struct E2kSched {
   uint8_t enable;
   uint8_t dbg;
+  uint8_t overflow;
   int cycle;
   E2kInsn *head;
   E2kInsn *tail;
