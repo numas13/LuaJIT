@@ -38,9 +38,6 @@ static unsigned alloc_syllable(ASMState *as, E2kBundle *bundle,
   return get_syllable_index(as, res, offset);
 }
 
-#define alloc_als(as, bundle, mask) \
-  alloc_syllable(as, bundle, mask, RES_ALS_OFFSET)
-
 #define checku4(x)  ((x) == (int32_t)(uint8_t)(x & 0xf))
 #define checku5(x)  ((x) == (int32_t)(uint8_t)(x & 0x1f))
 
@@ -347,6 +344,15 @@ static uint32_t emit_pdst(ASMState *as, E2kOpT type, intptr_t pred)
   }
 }
 
+static int emit_als(ASMState *as, E2kBundle *bundle, E2kResourceMask mask,
+                    uint32_t als)
+{
+  int als_idx = alloc_syllable(as, bundle, mask, RES_ALS_OFFSET);
+  bundle->als[als_idx] = als;
+  bundle->f1++;
+  return als_idx;
+}
+
 static void emit_ales(ASMState *as, E2kBundle *bundle, int als_idx,
                       uint16_t ales)
 {
@@ -361,19 +367,15 @@ static void emit_ales(ASMState *as, E2kBundle *bundle, int als_idx,
 static int emit_alopf7(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
                        uint32_t src1, uint32_t src2, uint32_t pred)
 {
-  uint64_t mask = e2kop[op].mask;
-  int als_idx = alloc_als(as, &as->bundle, mask);
-  E2kAlopf7 syl;
-  syl.i = 0;
+  int als_idx;
+  E2kAlopf7 syl = { 0 };
   syl.fields.pdst = pred;
   syl.fields.cmpopce = e2kop[op].opce;
   syl.fields.src2 = src2;
   syl.fields.src1 = src1;
   syl.fields.cop = e2kop[op].opc;
   syl.fields.spec = spec;
-
-  as->bundle.als[als_idx] = syl.i;
-  as->bundle.f1++;
+  als_idx = emit_als(as, &as->bundle, e2kop[op].mask, syl.i);
   emit_bundle_finalize(as, p);
   return als_idx;
 }
@@ -381,18 +383,14 @@ static int emit_alopf7(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
 static int emit_alopf3(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
                         uint64_t src1, uint32_t src2, uint32_t src3)
 {
-  uint64_t mask = e2kop[op].mask;
-  int als_idx = alloc_als(as, &as->bundle, mask);
-  E2kAlopf3 syl;
-  syl.i = 0;
-  syl.fields.src3  = src3;
+  int als_idx;
+  E2kAlopf3 syl = { 0 };
+  syl.fields.src3 = src3;
   syl.fields.src2 = src2;
   syl.fields.src1 = src1;
   syl.fields.cop = e2kop[op].opc;
   syl.fields.spec = spec;
-
-  as->bundle.als[als_idx] = syl.i;
-  as->bundle.f1++;
+  als_idx = emit_als(as, &as->bundle, e2kop[op].mask, syl.i);
   emit_bundle_finalize(as, p);
   return als_idx;
 }
@@ -400,18 +398,14 @@ static int emit_alopf3(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
 static int emit_alopf2(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
                        uint32_t src2, uint32_t dst)
 {
-  uint64_t mask = e2kop[op].mask;
-  int als_idx = alloc_als(as, &as->bundle, mask);
-  E2kAlopf2 syl;
-  syl.i = 0;
-  syl.fields.dst  = dst;
+  int als_idx;
+  E2kAlopf2 syl = { 0 };
+  syl.fields.dst = dst;
   syl.fields.src2 = src2;
   syl.fields.opce = e2kop[op].opce;
   syl.fields.cop = e2kop[op].opc;
   syl.fields.spec = spec;
-
-  as->bundle.als[als_idx] = syl.i;
-  as->bundle.f1++;
+  als_idx = emit_als(as, &as->bundle, e2kop[op].mask, syl.i);
   emit_bundle_finalize(as, p);
   return als_idx;
 }
@@ -419,18 +413,14 @@ static int emit_alopf2(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
 static int emit_alopf1(ASMState *as, MCode **p, uint32_t spec, uint32_t op,
                         uint32_t src1, uint32_t src2, uint32_t dst)
 {
-  uint64_t mask = e2kop[op].mask;
-  int als_idx = alloc_als(as, &as->bundle, mask);
-  E2kAlopf1 syl;
-  syl.i = 0;
-  syl.fields.dst  = dst;
+  int als_idx;
+  E2kAlopf1 syl = { 0 };
+  syl.fields.dst = dst;
   syl.fields.src2 = src2;
   syl.fields.src1 = src1;
   syl.fields.cop = e2kop[op].opc;
   syl.fields.spec = spec;
-
-  as->bundle.als[als_idx] = syl.i;
-  as->bundle.f1++;
+  als_idx = emit_als(as, &as->bundle, e2kop[op].mask, syl.i);
   emit_bundle_finalize(as, p);
   return als_idx;
 }
