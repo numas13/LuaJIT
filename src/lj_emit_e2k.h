@@ -566,7 +566,7 @@ static void bundle_setr(ASMState *as, MCode **p,
 
 /* -- E2K instruction scheduler ------------------------------------------- */
 
-#if 1
+#ifdef LUA_USE_ASSERT
 static void sched_dbg_impl(ASMState *as, const char *file, int line,
                            const char *func, const char *fmt, ...)
 {
@@ -637,6 +637,7 @@ static void sched_remove(ASMState *as, E2kInsn *insn)
   as->sched.free = insn;
 }
 
+#ifdef LUA_USE_ASSERT
 static const char *sched_reg_name(int rid)
 {
 #define E2K_RIDNAME(name) #name,
@@ -737,6 +738,7 @@ static void sched_dump_insn(ASMState *as, E2kInsn *insn)
     break;
   }
 }
+#endif
 
 /* Emit a single insn from the sched queue.  */
 static int sched_emit_single_insn(ASMState *as)
@@ -811,11 +813,13 @@ static int sched_emit_single_insn(ASMState *as)
     break;
   }
 
+#ifdef LUA_USE_ASSERT
   if (as->sched.dbg) {
     fprintf(stderr, "%08lx: ", (uintptr_t) as->mcp);
     sched_dump_insn(as, insn);
     fputc('\n', stderr);
   }
+#endif
 
   sched_remove(as, insn);
   return 1;
