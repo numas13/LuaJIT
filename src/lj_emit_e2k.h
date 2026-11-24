@@ -3,6 +3,17 @@
 ** Copyright (C) 2005-2025 Mike Pall. See Copyright Notice in luajit.h
 */
 
+/* -- Declarations -------------------------------------------------------- */
+
+typedef struct E2kOp {
+  char *name;
+  E2kResourceMask mask;
+  uint16_t ales;
+  uint32_t als;
+} E2kOp;
+
+static const E2kOp e2kop[];
+
 /* -- Bundling helpers ---------------------------------------------------- */
 
 static E2kResourceMask try_alloc_resource(E2kBundle *bundle,
