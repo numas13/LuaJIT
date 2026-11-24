@@ -28,7 +28,6 @@ typedef enum E2kInsnType {
 typedef enum E2kUnit {
   UNIT_INT,
   UNIT_FPU,
-  UNIT_VEC,
   UNIT_CT,
 } E2kUnit;
 
@@ -854,9 +853,6 @@ static void sched_use_gpr(ASMState *as, E2kInsn *insn, int rid, E2kIn in, int cl
       case UNIT_FPU:
         index = USE_GPR_F_C0;
         break;
-      case UNIT_VEC:
-        index = USE_GPR_V_C0;
-        break;
       default:
         lj_assertA(0, "unexpected unit");
         abort();
@@ -949,7 +945,7 @@ static E2kCycle sched_max_cycle(E2kCycle t0, E2kCycle t1)
 static int sched_cycles_to_ready_gpr(ASMState *as, E2kInsn *insn, int rid,
                                      int cluster)
 {
-  static const E2kIn map[4] = { IN_I, IN_F, IN_F, IN_S };
+  static const E2kIn map[3] = { IN_I, IN_F, IN_S };
   const E2kReservation *res;
   E2kUseGpr *use;
   E2kCycle max = 0;

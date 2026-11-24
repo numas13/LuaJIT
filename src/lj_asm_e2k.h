@@ -1920,7 +1920,7 @@ static const E2kReservation e2kres[] = {
   { UNIT_FPU,   OUT_FCMP,   RES_ALS_0134 },         /* TYPE_FCMP */
   { UNIT_FPU,   OUT_FP,     RES_ALS_0134 },         /* TYPE_FMISC */
   { UNIT_FPU,   OUT_FP,     RES_ALS_0134 },         /* TYPE_FCVT */
-  { UNIT_VEC,   OUT_VINT,   RES_ALS_0134 },         /* TYPE_VINT */
+  { UNIT_FPU,   OUT_VINT,   RES_ALS_0134 },         /* TYPE_VINT */
   { UNIT_CT,    OUT_DISP,   RES_CS0 },              /* TYPE_PREP */
   { UNIT_CT,    OUT_NONE,   RES_SS },               /* TYPE_CT */
 };

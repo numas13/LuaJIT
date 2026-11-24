@@ -414,9 +414,6 @@ typedef enum E2kUseGprIndex {
   /* fpu unit */
   USE_GPR_F_C0,
   USE_GPR_F_C1,
-  /* vec unit */
-  USE_GPR_V_C0,
-  USE_GPR_V_C1,
   /* store unit */
   USE_GPR_S_C0,
   USE_GPR_S_C1,
