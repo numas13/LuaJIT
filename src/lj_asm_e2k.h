@@ -5,6 +5,7 @@
 
 /* Environment variable names for e2k scheduler. */
 #define LJ_E2K_SCHED_DISABLE  "LJ_E2K_SCHED_DISABLE"
+#define LJ_E2K_SCHED_DISABLE_NOPS  "LJ_E2K_SCHED_DISABLE_NOPS"
 #define LJ_E2K_SCHED_DEBUG    "LJ_E2K_SCHED_DEBUG"
 
 /* -- Register allocator extensions --------------------------------------- */
@@ -1615,18 +1616,115 @@ static Reg asm_setup_call_slots(ASMState *as, IRIns *ir, const CCallInfo *ci)
   return REGSP_HINT(RID_RET);
 }
 
+static void asm_setup_sched_latencies(ASMState *as, int iset)
+{
+  static uint8_t initialized = 0;
+
+  if (initialized)
+    return;
+
+  /* Initialize latency table with all ones. */
+  for (int out = 0; out < OUT_LEN; out++)
+    for (int in = 0; in < IN_LEN; in++)
+      e2klat[out][in] = 1;
+
+  /* int ops */
+  sched_latency_set(OUT_INT,    IN_R,     2);
+
+  /* int cmp ops */
+  /* TODO: sched: elbrus-v6 cmp->ct|rlp latency */
+  sched_latency_set(OUT_ICMP,   IN_CT,    3);
+  sched_latency_set(OUT_ICMP,   IN_RLP,   2);
+
+  /* rrd, movtd, getsp */
+  sched_latency_set(OUT_SYS,    IN_I,     2);
+  sched_latency_set(OUT_SYS,    IN_F,     2);
+  sched_latency_set(OUT_SYS,    IN_S,     1);
+  sched_latency_set(OUT_SYS,    IN_S_C,   3);
+  sched_latency_set(OUT_SYS,    IN_R,     4);
+  sched_latency_set(OUT_SYS,    IN_CT,    9);
+
+  /* load ops */
+  if (iset < 6) {
+    sched_latency_set(OUT_LOAD,   IN_I,     3);
+    sched_latency_set(OUT_LOAD,   IN_F,     3);
+    sched_latency_set(OUT_LOAD,   IN_S,     4);
+    sched_latency_set(OUT_LOAD,   IN_S_C,   4);
+    sched_latency_set(OUT_LOAD,   IN_R,     4);
+  } else {
+    sched_latency_set(OUT_LOAD,   IN_I,     5);
+    sched_latency_set(OUT_LOAD,   IN_F,     5);
+    sched_latency_set(OUT_LOAD,   IN_S,     6);
+    sched_latency_set(OUT_LOAD,   IN_S_C,   6);
+    sched_latency_set(OUT_LOAD,   IN_R,     6);
+  }
+
+  /* fp ops */
+  sched_latency_set(OUT_FP,     IN_I,     6);
+  sched_latency_set(OUT_FP,     IN_F,     4);
+  sched_latency_set(OUT_FP,     IN_S,     4);
+  sched_latency_set(OUT_FP,     IN_S_C,   6);
+  sched_latency_set(OUT_FP,     IN_R,     6);
+
+  /* fp cmp ops */
+  /* TODO: sched: elbrus-v6 fcmp->ct|rlp latency */
+  sched_latency_set(OUT_FCMP,   IN_CT,    5);
+  sched_latency_set(OUT_FCMP,   IN_RLP,   4);
+  sched_latency_set(OUT_FCMP,   IN_ELP,   3);
+
+  /* fp misc ops */
+  sched_latency_set(OUT_FMISC,  IN_I,     4);
+  sched_latency_set(OUT_FMISC,  IN_F,     2);
+  sched_latency_set(OUT_FMISC,  IN_S,     2);
+  sched_latency_set(OUT_FMISC,  IN_S_C,   3);
+  sched_latency_set(OUT_FMISC,  IN_R,     4);
+
+  /* fdiv ops */
+  sched_latency_set(OUT_FDIV,   IN_I,     13);
+  sched_latency_set(OUT_FDIV,   IN_F,     11);
+  sched_latency_set(OUT_FDIV,   IN_S,     11);
+  sched_latency_set(OUT_FDIV,   IN_S_C,   13);
+  sched_latency_set(OUT_FDIV,   IN_R,     13);
+
+  /* fsqrtt ops */
+  sched_latency_set(OUT_FSQRTT, IN_I,     16);
+  sched_latency_set(OUT_FSQRTT, IN_F,     14);
+  sched_latency_set(OUT_FSQRTT, IN_S,     14);
+  sched_latency_set(OUT_FSQRTT, IN_S_C,   16);
+  sched_latency_set(OUT_FSQRTT, IN_R,     16);
+
+  /* vec int ops */
+  sched_latency_set(OUT_VINT,   IN_I,     4);
+  sched_latency_set(OUT_VINT,   IN_F,     1);
+  sched_latency_set(OUT_VINT,   IN_S,     1);
+  sched_latency_set(OUT_VINT,   IN_S_C,   3);
+  sched_latency_set(OUT_VINT,   IN_R,     4);
+
+  /* disp ops */
+  sched_latency_set(OUT_DISP,   IN_CT,    5);
+
+  initialized = 1;
+}
+
+static void asm_setup_sched(ASMState *as)
+{
+  memset(&as->sched, 0, sizeof(as->sched));
+  /* Do not forget to preserve across sched_reset calls. */
+  if (!getenv(LJ_E2K_SCHED_DISABLE))
+    as->sched.enable = E2K_SCHED;
+  if (getenv(LJ_E2K_SCHED_DISABLE_NOPS))
+    as->sched.enable &= ~E2K_SCHED_NOPS;
+  if (getenv(LJ_E2K_SCHED_DEBUG))
+    as->sched.dbg = 1;
+
+  asm_setup_sched_latencies(as, __iset__);
+}
+
 /* Target-specific setup. */
 static void asm_setup_target(ASMState *as)
 {
-  const char *sched_disable = getenv(LJ_E2K_SCHED_DISABLE);
-  const char *sched_dbg = getenv(LJ_E2K_SCHED_DEBUG);
-
-  memset(&as->sched, 0, sizeof(as->sched));
-  /* Do not forget to preserve across sched_reset calls. */
-  as->sched.enable = !sched_disable ? E2K_SCHED : 0;
-  as->sched.dbg = sched_dbg ? 1 : 0;
-
   bundle_reset(&as->bundle);
+  asm_setup_sched(as);
   asm_exitstub_setup(as);
 }
 
@@ -1807,118 +1905,137 @@ void lj_asm_patchexit(jit_State *J, GCtrace *T, ExitNo exitno, MCode *target)
 
 /* -- Static data --------------------------------------------------------- */
 
+static const E2kReservation e2kres[] = {
+/*  unit        out         resources */
+  { UNIT_INT,   OUT_INT,    RES_ALS_012345 },       /* TYPE_INT */
+  { UNIT_FPU,   OUT_FP,     RES_ALS_0134 },         /* TYPE_IMUL */
+  { UNIT_INT,   OUT_ICMP,   RES_ALS_0134 },         /* TYPE_ICMP */
+  { UNIT_INT,   OUT_SYS,    RES_ALS0 },             /* TYPE_SYS */
+  { UNIT_INT,   OUT_LOAD,   RES_ALS_0235 },         /* TYPE_LOAD */
+  { UNIT_INT,   OUT_NONE,   RES_ALS_25 },           /* TYPE_STORE */
+  { UNIT_FPU,   OUT_FP,     RES_ALS_0134 },         /* TYPE_FADD */
+  { UNIT_FPU,   OUT_FP,     RES_ALS_0134 },         /* TYPE_FMUL */
+  { UNIT_FPU,   OUT_FDIV,   RES_ALS5 },             /* TYPE_FDIV */
+  { UNIT_FPU,   OUT_FSQRTT, RES_ALS5 },             /* TYPE_FSQRTT */
+  { UNIT_FPU,   OUT_FCMP,   RES_ALS_0134 },         /* TYPE_FCMP */
+  { UNIT_FPU,   OUT_FP,     RES_ALS_0134 },         /* TYPE_FMISC */
+  { UNIT_FPU,   OUT_FP,     RES_ALS_0134 },         /* TYPE_FCVT */
+  { UNIT_VEC,   OUT_VINT,   RES_ALS_0134 },         /* TYPE_VINT */
+  { UNIT_CT,    OUT_DISP,   RES_CS0 },              /* TYPE_PREP */
+  { UNIT_CT,    OUT_NONE,   RES_SS },               /* TYPE_CT */
+};
+
 static const E2kOp e2kop[] = {
-/*  name        resources       ales    als */
-  { "ANDs",     RES_ALS_012345, 0x0000, 0x00000000 },
-  { "ANDd",     RES_ALS_012345, 0x0000, 0x01000000 },
-  { "ANDNs",    RES_ALS_012345, 0x0000, 0x02000000 },
-  { "ANDNd",    RES_ALS_012345, 0x0000, 0x03000000 },
-  { "ORs",      RES_ALS_012345, 0x0000, 0x04000000 },
-  { "ORd",      RES_ALS_012345, 0x0000, 0x05000000 },
-  { "ORNs",     RES_ALS_012345, 0x0000, 0x06000000 },
-  { "ORNd",     RES_ALS_012345, 0x0000, 0x07000000 },
+/*  name          type              ales    als */
+  { "ANDs",       TYPE_INT,         0x0000, 0x00000000 },
+  { "ANDd",       TYPE_INT,         0x0000, 0x01000000 },
+  { "ANDNs",      TYPE_INT,         0x0000, 0x02000000 },
+  { "ANDNd",      TYPE_INT,         0x0000, 0x03000000 },
+  { "ORs",        TYPE_INT,         0x0000, 0x04000000 },
+  { "ORd",        TYPE_INT,         0x0000, 0x05000000 },
+  { "ORNs",       TYPE_INT,         0x0000, 0x06000000 },
+  { "ORNd",       TYPE_INT,         0x0000, 0x07000000 },
 /* --------------------------------------------------- */
-  { "XORs",     RES_ALS_012345, 0x0000, 0x08000000 },
-  { "XORd",     RES_ALS_012345, 0x0000, 0x09000000 },
-  { "XORNs",    RES_ALS_012345, 0x0000, 0x0a000000 },
-  { "XORNd",    RES_ALS_012345, 0x0000, 0x0b000000 },
-  { "SXT",      RES_ALS_012345, 0x0000, 0x0c000000 },
-  { "MERGEs",   RES_ALS_012345, 0x0000, 0x0e000000 },
-  { "MERGEd",   RES_ALS_012345, 0x0000, 0x0f000000 },
+  { "XORs",       TYPE_INT,         0x0000, 0x08000000 },
+  { "XORd",       TYPE_INT,         0x0000, 0x09000000 },
+  { "XORNs",      TYPE_INT,         0x0000, 0x0a000000 },
+  { "XORNd",      TYPE_INT,         0x0000, 0x0b000000 },
+  { "SXT",        TYPE_INT,         0x0000, 0x0c000000 },
+  { "MERGEs",     TYPE_INT,         0x0000, 0x0e000000 },
+  { "MERGEd",     TYPE_INT,         0x0000, 0x0f000000 },
 /* --------------------------------------------------- */
-  { "ADDs",     RES_ALS_012345, 0x0000, 0x10000000 },
-  { "ADDd",     RES_ALS_012345, 0x0000, 0x11000000 },
-  { "SUBs",     RES_ALS_012345, 0x0000, 0x12000000 },
-  { "SUBd",     RES_ALS_012345, 0x0000, 0x13000000 },
-  { "SCLs",     RES_ALS_012345, 0x0000, 0x14000000 },
-  { "SCLd",     RES_ALS_012345, 0x0000, 0x15000000 },
-  { "SCRs",     RES_ALS_012345, 0x0000, 0x16000000 },
-  { "SCRd",     RES_ALS_012345, 0x0000, 0x17000000 },
+  { "ADDs",       TYPE_INT,         0x0000, 0x10000000 },
+  { "ADDd",       TYPE_INT,         0x0000, 0x11000000 },
+  { "SUBs",       TYPE_INT,         0x0000, 0x12000000 },
+  { "SUBd",       TYPE_INT,         0x0000, 0x13000000 },
+  { "SCLs",       TYPE_INT,         0x0000, 0x14000000 },
+  { "SCLd",       TYPE_INT,         0x0000, 0x15000000 },
+  { "SCRs",       TYPE_INT,         0x0000, 0x16000000 },
+  { "SCRd",       TYPE_INT,         0x0000, 0x17000000 },
 /* --------------------------------------------------- */
-  { "SHLs",     RES_ALS_012345, 0x0000, 0x18000000 },
-  { "SHLd",     RES_ALS_012345, 0x0000, 0x19000000 },
-  { "SHRs",     RES_ALS_012345, 0x0000, 0x1a000000 },
-  { "SHRd",     RES_ALS_012345, 0x0000, 0x1b000000 },
-  { "SARs",     RES_ALS_012345, 0x0000, 0x1c000000 },
-  { "SARd",     RES_ALS_012345, 0x0000, 0x1d000000 },
-  { "GETFs",    RES_ALS_012345, 0x0000, 0x1e000000 },
-  { "GETFd",    RES_ALS_012345, 0x0000, 0x1f000000 },
+  { "SHLs",       TYPE_INT,         0x0000, 0x18000000 },
+  { "SHLd",       TYPE_INT,         0x0000, 0x19000000 },
+  { "SHRs",       TYPE_INT,         0x0000, 0x1a000000 },
+  { "SHRd",       TYPE_INT,         0x0000, 0x1b000000 },
+  { "SARs",       TYPE_INT,         0x0000, 0x1c000000 },
+  { "SARd",       TYPE_INT,         0x0000, 0x1d000000 },
+  { "GETFs",      TYPE_INT,         0x0000, 0x1e000000 },
+  { "GETFd",      TYPE_INT,         0x0000, 0x1f000000 },
 /* --------------------------------------------------- */
-  { "CMPBsb",   RES_ALS_0134,   0x0000, 0x20000020 },
-  { "CMPEsb",   RES_ALS_0134,   0x0000, 0x20000040 },
-  { "CMPBEsb",  RES_ALS_0134,   0x0000, 0x20000060 },
-  { "CMPLsb",   RES_ALS_0134,   0x0000, 0x200000c0 },
-  { "CMPLEsb",  RES_ALS_0134,   0x0000, 0x200000e0 },
-  { "CMPBdb",   RES_ALS_0134,   0x0000, 0x21000020 },
-  { "CMPEdb",   RES_ALS_0134,   0x0000, 0x21000040 },
-  { "CMPBEdb",  RES_ALS_0134,   0x0000, 0x21000060 },
-  { "CMPLdb",   RES_ALS_0134,   0x0000, 0x210000c0 },
-  { "CMPLEdb",  RES_ALS_0134,   0x0000, 0x210000e0 },
-  { "CMPANDEsb",RES_ALS_0134,   0x0000, 0x22000040 },
-  { "STb",      RES_ALS_25,     0x0000, 0x24000000 },
-  { "STh",      RES_ALS_25,     0x0000, 0x25000000 },
-  { "STw",      RES_ALS_25,     0x0000, 0x26000000 },
-  { "STd",      RES_ALS_25,     0x0000, 0x27000000 },
+  { "CMPBsb",     TYPE_ICMP,        0x0000, 0x20000020 },
+  { "CMPEsb",     TYPE_ICMP,        0x0000, 0x20000040 },
+  { "CMPBEsb",    TYPE_ICMP,        0x0000, 0x20000060 },
+  { "CMPLsb",     TYPE_ICMP,        0x0000, 0x200000c0 },
+  { "CMPLEsb",    TYPE_ICMP,        0x0000, 0x200000e0 },
+  { "CMPBdb",     TYPE_ICMP,        0x0000, 0x21000020 },
+  { "CMPEdb",     TYPE_ICMP,        0x0000, 0x21000040 },
+  { "CMPBEdb",    TYPE_ICMP,        0x0000, 0x21000060 },
+  { "CMPLdb",     TYPE_ICMP,        0x0000, 0x210000c0 },
+  { "CMPLEdb",    TYPE_ICMP,        0x0000, 0x210000e0 },
+  { "CMPANDEsb",  TYPE_ICMP,        0x0000, 0x22000040 },
+  { "STb",        TYPE_STORE,       0x0000, 0x24000000 },
+  { "STh",        TYPE_STORE,       0x0000, 0x25000000 },
+  { "STw",        TYPE_STORE,       0x0000, 0x26000000 },
+  { "STd",        TYPE_STORE,       0x0000, 0x27000000 },
 /* --------------------------------------------------- */
-  { "FCMPEQsb", RES_ALS_0134,   0x0000, 0x2e000000 },
-  { "FCMPLTsb", RES_ALS_0134,   0x0000, 0x2e000020 },
-  { "FCMPLEsb", RES_ALS_0134,   0x0000, 0x2e000040 },
-  { "FCMPNLTsb",RES_ALS_0134,   0x0000, 0x2e0000a0 },
-  { "FCMPNLEsb",RES_ALS_0134,   0x0000, 0x2e0000c0 },
-  { "FCMPEQdb", RES_ALS_0134,   0x0000, 0x2f000000 },
-  { "FCMPLTdb", RES_ALS_0134,   0x0000, 0x2f000020 },
-  { "FCMPLEdb", RES_ALS_0134,   0x0000, 0x2f000040 },
-  { "FCMPNLTdb",RES_ALS_0134,   0x0000, 0x2f0000a0 },
-  { "FCMPNLEdb",RES_ALS_0134,   0x0000, 0x2f0000c0 },
+  { "FCMPEQsb",   TYPE_FCMP,        0x0000, 0x2e000000 },
+  { "FCMPLTsb",   TYPE_FCMP,        0x0000, 0x2e000020 },
+  { "FCMPLEsb",   TYPE_FCMP,        0x0000, 0x2e000040 },
+  { "FCMPNLTsb",  TYPE_FCMP,        0x0000, 0x2e0000a0 },
+  { "FCMPNLEsb",  TYPE_FCMP,        0x0000, 0x2e0000c0 },
+  { "FCMPEQdb",   TYPE_FCMP,        0x0000, 0x2f000000 },
+  { "FCMPLTdb",   TYPE_FCMP,        0x0000, 0x2f000020 },
+  { "FCMPLEdb",   TYPE_FCMP,        0x0000, 0x2f000040 },
+  { "FCMPNLTdb",  TYPE_FCMP,        0x0000, 0x2f0000a0 },
+  { "FCMPNLEdb",  TYPE_FCMP,        0x0000, 0x2f0000c0 },
 /* --------------------------------------------------- */
-  { "FADDs",    RES_ALS_0134,   0x0000, 0x30000000 },
-  { "FADDd",    RES_ALS_0134,   0x0000, 0x31000000 },
-  { "FSUBs",    RES_ALS_0134,   0x0000, 0x32000000 },
-  { "FSUBd",    RES_ALS_0134,   0x0000, 0x33000000 },
-  { "FMINs",    RES_ALS_0134,   0x0000, 0x34000000 },
-  { "FMINd",    RES_ALS_0134,   0x0000, 0x35000000 },
-  { "FMAXs",    RES_ALS_0134,   0x0000, 0x36000000 },
-  { "FMAXd",    RES_ALS_0134,   0x0000, 0x37000000 },
+  { "FADDs",      TYPE_FADD,        0x0000, 0x30000000 },
+  { "FADDd",      TYPE_FADD,        0x0000, 0x31000000 },
+  { "FSUBs",      TYPE_FADD,        0x0000, 0x32000000 },
+  { "FSUBd",      TYPE_FADD,        0x0000, 0x33000000 },
+  { "FMINs",      TYPE_FMISC,       0x0000, 0x34000000 },
+  { "FMINd",      TYPE_FMISC,       0x0000, 0x35000000 },
+  { "FMAXs",      TYPE_FMISC,       0x0000, 0x36000000 },
+  { "FMAXd",      TYPE_FMISC,       0x0000, 0x37000000 },
 /* --------------------------------------------------- */
-  { "FMULs",    RES_ALS_0134,   0x0000, 0x38000000 },
-  { "FMULd",    RES_ALS_0134,   0x0000, 0x39000000 },
-  { "FSTOIStr", RES_ALS_0134,   0x0000, 0x3cc20000 },
-  { "ISTOFS",   RES_ALS_0134,   0x0000, 0x3cc40000 },
-  { "FDTOIDtr", RES_ALS_0134,   0x0000, 0x3dc20000 },
-  { "IDTOFD",   RES_ALS_0134,   0x0000, 0x3dc40000 },
-  { "FSTOIDtr", RES_ALS_0134,   0x0000, 0x3ec20000 },
-  { "ISTOFD",   RES_ALS_0134,   0x0000, 0x3ec40000 },
-  { "FSTOFD",   RES_ALS_0134,   0x0000, 0x3ec60000 },
-  { "FDTOIStr", RES_ALS_0134,   0x0000, 0x3fc20000 },
-  { "IDTOFS",   RES_ALS_0134,   0x0000, 0x3fc40000 },
-  { "FDTOFS",   RES_ALS_0134,   0x0000, 0x3fc60000 },
+  { "FMULs",      TYPE_FMUL,        0x0000, 0x38000000 },
+  { "FMULd",      TYPE_FMUL,        0x0000, 0x39000000 },
+  { "FSTOIStr",   TYPE_FCVT,        0x0000, 0x3cc20000 },
+  { "ISTOFS",     TYPE_FCVT,        0x0000, 0x3cc40000 },
+  { "FDTOIDtr",   TYPE_FCVT,        0x0000, 0x3dc20000 },
+  { "IDTOFD",     TYPE_FCVT,        0x0000, 0x3dc40000 },
+  { "FSTOIDtr",   TYPE_FCVT,        0x0000, 0x3ec20000 },
+  { "ISTOFD",     TYPE_FCVT,        0x0000, 0x3ec40000 },
+  { "FSTOFD",     TYPE_FCVT,        0x0000, 0x3ec60000 },
+  { "FDTOIStr",   TYPE_FCVT,        0x0000, 0x3fc20000 },
+  { "IDTOFS",     TYPE_FCVT,        0x0000, 0x3fc40000 },
+  { "FDTOFS",     TYPE_FCVT,        0x0000, 0x3fc60000 },
 /* --------------------------------------------------- */
-  { "MOVTd",    RES_ALS0,       0x0000, 0x61c00000 },
-  { "LDb",      RES_ALS_0235,   0x0000, 0x64000000 },
-  { "LDh",      RES_ALS_0235,   0x0000, 0x65000000 },
-  { "LDw",      RES_ALS_0235,   0x0000, 0x66000000 },
-  { "LDd",      RES_ALS_0235,   0x0000, 0x67000000 },
+  { "MOVTd",      TYPE_SYS,         0x0000, 0x61c00000 },
+  { "LDb",        TYPE_LOAD,        0x0000, 0x64000000 },
+  { "LDh",        TYPE_LOAD,        0x0000, 0x65000000 },
+  { "LDw",        TYPE_LOAD,        0x0000, 0x66000000 },
+  { "LDd",        TYPE_LOAD,        0x0000, 0x67000000 },
 /* --------------------------------------------------- */
-  { "MULs",     RES_ALS_0134,   0x01c0, 0x20000000 },
-  { "MULd",     RES_ALS_0134,   0x01c0, 0x21000000 },
-  { "UMULX",    RES_ALS_0134,   0x01c0, 0x22000000 },
-  { "SMULX",    RES_ALS_0134,   0x01c0, 0x23000000 },
+  { "MULs",       TYPE_IMUL,        0x01c0, 0x20000000 },
+  { "MULd",       TYPE_IMUL,        0x01c0, 0x21000000 },
+  { "UMULX",      TYPE_IMUL,        0x01c0, 0x22000000 },
+  { "SMULX",      TYPE_IMUL,        0x01c0, 0x23000000 },
 /* --------------------------------------------------- */
-  { "FDIVd",    RES_ALS5,       0x01c0, 0x49000000 },
-  { "FSQRTId",  RES_ALS5,       0x01c0, 0x4dc00000 },
+  { "FDIVd",      TYPE_FDIV,        0x01c0, 0x49000000 },
+  { "FSQRTId",    TYPE_FDIV,        0x01c0, 0x4dc00000 },
 /* --------------------------------------------------- */
-  { "FSQRTTd",  RES_ALS5,       0x01c0, 0x51000000 },
+  { "FSQRTTd",    TYPE_FSQRTT,      0x01c0, 0x51000000 },
 /* --------------------------------------------------- */
-  { "GETSP",    RES_ALS0,       0x01c0, 0x58ec0000 },
+  { "GETSP",      TYPE_SYS,         0x01c0, 0x58ec0000 },
 /* --------------------------------------------------- */
-  { "FDTOIFd",  RES_ALS_0134,   0x01c0, 0x6d000000 },
+  { "FDTOIFd",    TYPE_FCVT,        0x01c0, 0x6d000000 },
 /* --------------------------------------------------- */
-  { "PSHUFB",   RES_ALS_0134,   0x0f00, 0x4d000000 },
+  { "PSHUFB",     TYPE_VINT,        0x0f00, 0x4d000000 },
 /* --------------------------------------------------- */
-  { "",         RES_NONE,       0x0000, 0x00000000 },
-  { "DISP",     RES_NONE,       0x0000, 0x00000000 },
-  { "PREPCALL", RES_NONE,       0x0000, 0x00000000 },
-  { "CT",       RES_NONE,       0x0000, 0x00000000 },
-  { "IBRANCH",  RES_NONE,       0x0000, 0x00000000 },
-  { "CALL",     RES_NONE,       0x0000, 0x00000000 },
+  { "DISP",       TYPE_PREP,        0x0000, 0x00000000 },
+  { "PREPCALL",   TYPE_PREP,        0x0000, 0x00000000 },
+  { "CT",         TYPE_CT,          0x0000, 0x00000000 },
+  { "IBRANCH",    TYPE_CT,          0x0000, 0x00000000 },
+  { "CALL",       TYPE_CT,          0x0000, 0x00000000 },
 };

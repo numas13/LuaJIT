@@ -21,6 +21,7 @@
   _(R24) _(R25) _(R26) _(R27) _(R28) _(R29) _(R30) _(R31) \
   _(G16) _(G17) _(G18) _(G19)
 
+/* Keep in sync with RID_MAX_PRED and RID_MAX_CTPR. */
 #define NGPRDEF(_) \
   _(PRED0)  _(PRED1)  _(PRED2)  _(PRED3) \
   _(CTPR1) _(CTPR2) _(CTPR3)
@@ -33,6 +34,8 @@ enum {
   GPRDEF(RIDENUM)  /* Directly addressable, rotating and global registers */
   RID_MAX,
   NGPRDEF(RIDENUM) /* Predicates and control flow registers */
+  RID_PRED_MAX = RID_PRED3,
+  RID_CTPR_MAX = RID_CTPR3,
   RID_TMP  = RID_G16, /* Keep in sync with E2K_REG_EXITNO */
   RID_TMP1 = RID_G16,
   RID_TMP2 = RID_G17,
@@ -340,7 +343,10 @@ typedef enum {
 
 /* -- Scheduler ----------------------------------------------------------- */
 
-#define E2K_SCHED 1
+#define E2K_SCHED_QUEUE   (1 << 0)
+#define E2K_SCHED_NOPS    (1 << 1)
+#define E2K_SCHED         (E2K_SCHED_NOPS | E2K_SCHED_QUEUE)
+#define E2K_SCHED_WINDOW_SIZE 32
 
 typedef struct E2kInsn E2kInsn;
 
@@ -365,8 +371,7 @@ struct E2kInsn {
   union {
     struct {
       uint64_t literal;
-      /* E2kAlopFlags */
-      uint16_t flags;
+      uint16_t flags; /* E2kAlopFlags */
       uint16_t src1;
       uint16_t src2;
       uint16_t src3;
@@ -400,16 +405,50 @@ struct E2kInsn {
   };
 };
 
-#define E2K_SCHED_WINDOW_SIZE 32
+typedef int16_t E2kCycle;
+
+typedef enum E2kUseGprIndex {
+  /* int unit */
+  USE_GPR_I_C0,
+  USE_GPR_I_C1,
+  /* fpu unit */
+  USE_GPR_F_C0,
+  USE_GPR_F_C1,
+  /* vec unit */
+  USE_GPR_V_C0,
+  USE_GPR_V_C1,
+  /* store unit */
+  USE_GPR_S_C0,
+  USE_GPR_S_C1,
+  USE_GPR_LEN
+} E2kUseGprIndex;
+
+typedef struct E2kUseGpr {
+  uint8_t used;
+  /* Track the last source input for every unit in both clusters. */
+  E2kCycle src[USE_GPR_LEN];
+} E2kUseGpr;
+
+typedef struct E2kUsePred {
+  E2kCycle rlp;
+  E2kCycle ct;
+} E2kUsePred;
+
+typedef struct E2kUseCtpr {
+  E2kCycle ct;
+} E2kUseCtpr;
 
 typedef struct E2kSched {
   uint8_t enable;
   uint8_t dbg;
   uint8_t overflow;
-  int cycle;
+  E2kCycle cycle;
   E2kInsn *head;
   E2kInsn *tail;
   E2kInsn *free;
+  E2kUseGpr use_gpr[RID_MAX];
+  E2kUsePred use_pred[RID_PRED_MAX - RID_PRED0 + 1];
+  E2kUseCtpr use_ctpr[RID_CTPR_MAX - RID_CTPR3 + 1];
   E2kInsn insn[E2K_SCHED_WINDOW_SIZE];
 } E2kSched;
 
@@ -489,7 +528,7 @@ enum {
   E2K_PSHUFB,
   /* ------------------------------------------------- */
   E2K_ALOP_END,
-  E2K_INSN_DISP,
+  E2K_INSN_DISP = E2K_ALOP_END,
   E2K_INSN_PREPCALL,
   E2K_INSN_CT,
   E2K_INSN_IBRANCH,

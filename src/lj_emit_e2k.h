@@ -5,13 +5,77 @@
 
 /* -- Declarations -------------------------------------------------------- */
 
+/* Keep in sync with e2kres. */
+typedef enum E2kInsnType {
+  TYPE_INT,
+  TYPE_IMUL,
+  TYPE_ICMP,
+  TYPE_SYS,
+  TYPE_LOAD,
+  TYPE_STORE,
+  TYPE_FADD,
+  TYPE_FMUL,
+  TYPE_FDIV,
+  TYPE_FSQRTT,
+  TYPE_FCMP,
+  TYPE_FMISC,
+  TYPE_FCVT,
+  TYPE_VINT,
+  TYPE_PREP,
+  TYPE_CT,
+} E2kInsnType;
+
+typedef enum E2kUnit {
+  UNIT_INT,
+  UNIT_FPU,
+  UNIT_VEC,
+  UNIT_CT,
+} E2kUnit;
+
+typedef enum E2kIn {
+  IN_I,     /* int inputs. */
+  IN_F,     /* fp or ver inputs. */
+  IN_S,     /* store source input. */
+  IN_S_C,   /* like IN_S but from a another cluster. */
+  IN_R,     /* all inputs from a another cluster. */
+  IN_RLP,
+  IN_ELP,
+  IN_CT,
+  IN_LEN,
+} E2kIn;
+
+typedef enum E2kOut {
+  OUT_NONE,
+  OUT_INT,
+  OUT_ICMP,
+  OUT_SYS,
+  OUT_LOAD,
+  OUT_FP,
+  OUT_FCMP,
+  OUT_FMISC,
+  OUT_FDIV,
+  OUT_FSQRT,
+  OUT_FSQRTT,
+  OUT_VINT,
+  OUT_DISP,
+  OUT_LEN,
+} E2kOut;
+
+typedef struct E2kReservation {
+  uint8_t unit;   /* E2kUnit */
+  uint8_t out;    /* E2kOut */
+  E2kResourceMask mask;
+} E2kReservation;
+
 typedef struct E2kOp {
   char *name;
-  E2kResourceMask mask;
+  uint8_t type; /* E2kInsnType */
   uint16_t ales;
   uint32_t als;
 } E2kOp;
 
+static uint8_t e2klat[OUT_LEN][IN_LEN] = { 0 };
+static const E2kReservation e2kres[];
 static const E2kOp e2kop[];
 
 /* -- Bundling helpers ---------------------------------------------------- */
@@ -121,6 +185,19 @@ static MCode *bundle_pack(ASMState *as, MCode *mxp)
   uint8_t lng = f1 + f2 + f3 + f4;
   uint8_t hs_lng = (lng + 1) & -2;
 
+  /* Emit extra nops. */
+  if (as->bundle.nop > 7) {
+    int tail_nops = as->bundle.nop % 8;
+    *--mxp = 0;
+    *--mxp = E2K_NOP(2, tail_nops);
+    as->bundle.nop -= tail_nops + 1;
+    while (as->bundle.nop > 7) {
+      as->bundle.nop -= 8;
+      *--mxp = 0;
+      *--mxp = E2K_NOP(2, 7);
+    }
+  }
+
   if (as->bundle.lng) {
     lj_assertA(hs_lng <= as->bundle.lng, "bundle overflow");
     hs_lng = as->bundle.lng;
@@ -139,7 +216,7 @@ static MCode *bundle_pack(ASMState *as, MCode *mxp)
   hs.i = 0;
   hs.fields.mdl = (uint32_t)(f1 + f2 - 1);
   hs.fields.lng = (uint32_t)(hs_lng >> 1) - 1;
-  hs.fields.nop = (uint32_t)as->bundle.nop;
+  hs.fields.nop = as->bundle.nop;
   hs.fields.x_s_sw = hs_x_s_sw;
   hs.fields.c = hs_c;
   hs.fields.cds = hs_cds >> 1;
@@ -358,7 +435,9 @@ static uint32_t bundle_pdst(ASMState *as, E2kOpT type, intptr_t pred)
 static int bundle_alop(ASMState *as, MCode **p, int spec, uint32_t op,
                        uint8_t src1, uint8_t src2, uint8_t src3, uint8_t dst)
 {
-  int als_idx = alloc_syllable(as, &as->bundle, e2kop[op].mask, RES_ALS_OFFSET);
+  E2kInsnType type = e2kop[op].type;
+  E2kResourceMask mask = e2kres[type].mask;
+  int als_idx = alloc_syllable(as, &as->bundle, mask, RES_ALS_OFFSET);
   uint32_t als = e2kop[op].als;
   als |= dst;
   als |= (uint32_t) src2 << 8;
@@ -452,7 +531,7 @@ static void bundle_cds(ASMState *as, int opc, int als, Reg pred, int inverted,
   bundle_alopf1_ii(as, 0, E2K_ADDD, (snapno) < 32 ? (snapno) : 31, \
       (snapno) < 32 ? 0 : (snapno) - 31, RID_TMP, p);
 #define bundle_nop(as, nops) \
-  as->bundle.nop = nops
+  (as)->bundle.nop = (nops)
 #define bundle_len(as, len) \
   (as)->bundle.lng = (len)
 
@@ -603,6 +682,15 @@ static void sched_dbg_impl(ASMState *as, const char *file, int line,
 #define sched_dbg(as, ...) ((void) 0)
 #endif
 
+#define sched_latency(res, to) e2klat[(res)->out][to]
+
+#define ALC_CLUSTER(alc_idx) ((alc_idx) > 2)
+
+static void sched_latency_set(E2kOut from, E2kIn to, uint8_t value)
+{
+  e2klat[from][to] = value;
+}
+
 static void sched_reset(ASMState *as)
 {
   uint8_t saved_enable, saved_dbg;
@@ -751,35 +839,252 @@ static void sched_dump_insn(ASMState *as, E2kInsn *insn)
 }
 #endif
 
-/* Emit a single insn from the sched queue.  */
-static int sched_emit_single_insn(ASMState *as)
+static void sched_use_gpr(ASMState *as, E2kInsn *insn, int rid, E2kIn in, int cluster)
 {
-  E2kInsn *insn = as->sched.tail;
-  int als_idx, src1, src2, src3, dst;
+  E2kUseGpr *use;
+  int index;
+  lj_assertA(rid < RID_MAX, "expect gpr");
+  use = as->sched.use_gpr + rid;
+  use->used = 1;
+  if (in == IN_R) {
+    switch (e2kres[e2kop[insn->op].type].unit) {
+      case UNIT_INT:
+        index = USE_GPR_I_C0;
+        break;
+      case UNIT_FPU:
+        index = USE_GPR_F_C0;
+        break;
+      case UNIT_VEC:
+        index = USE_GPR_V_C0;
+        break;
+      default:
+        lj_assertA(0, "unexpected unit");
+        abort();
+    }
+  } else if (in == IN_S) {
+    index = USE_GPR_S_C0;
+  } else {
+    lj_assertA(0, "unexpected gpr use in %d", in);
+    abort();
+  }
+  use->src[index + cluster] = as->sched.cycle;
+}
 
-  if (!insn)
+static void sched_use_pred(ASMState *as, E2kInsn *insn, int rid, E2kIn in)
+{
+  E2kUsePred *use;
+  lj_assertA(rid >= RID_PRED0 && rid <= RID_PRED_MAX, "expect pred");
+  use = as->sched.use_pred + (rid - RID_PRED0);
+  switch (in) {
+  case IN_RLP:
+    use->rlp = as->sched.cycle;
+    break;
+  case IN_CT:
+    use->ct = as->sched.cycle;
+    break;
+  default:
+    lj_assertA(0, "unexpected pred use %d", in);
+    abort();
+  }
+}
+
+static void sched_use_ctpr(ASMState *as, E2kInsn *insn, int rid, E2kIn in)
+{
+  E2kUseCtpr *use;
+  lj_assertA(rid >= RID_CTPR1 && rid <= RID_CTPR_MAX, "expect ctpr");
+  use = as->sched.use_ctpr + (rid - RID_CTPR1);
+  switch (in) {
+  case IN_CT:
+    use->ct = as->sched.cycle;
+    break;
+  default:
+    lj_assertA(0, "unexpected ctpr use in %d", in);
+    abort();
+  }
+}
+
+static void sched_use(ASMState *as, E2kInsn *insn, int cluster)
+{
+  switch (insn->op) {
+  case E2K_INSN_DISP:
+  case E2K_INSN_PREPCALL:
+    break;
+  case E2K_INSN_CT:
+    sched_use_ctpr(as, insn, insn->ct.ctpr, IN_CT);
+    if (insn->ct.pred)
+      sched_use_pred(as, insn, insn->ct.pred, IN_CT);
+    break;
+  case E2K_INSN_IBRANCH:
+    if (insn->ibranch.pred)
+      sched_use_pred(as, insn, insn->ibranch.pred, IN_CT);
+    break;
+  case E2K_INSN_CALL:
+    sched_use_ctpr(as, insn, insn->call.ctpr, IN_CT);
+    if (insn->call.pred)
+      sched_use_pred(as, insn, insn->call.pred, IN_CT);
+    break;
+  default:
+    lj_assertA(insn->op < E2K_ALOP_END, "expect alop");
+    if (insn->alop.flags & ALOP_SRC1_GPR)
+      sched_use_gpr(as, insn, insn->alop.src1, IN_R, cluster);
+    if (insn->alop.flags & ALOP_SRC2_GPR)
+      sched_use_gpr(as, insn, insn->alop.src2, IN_R, cluster);
+    if (insn->alop.flags & ALOP_SRC3_GPR)
+      sched_use_gpr(as, insn, insn->alop.src3, IN_R, cluster);
+    if (insn->alop.flags & ALOP_SRC4_GPR)
+      sched_use_gpr(as, insn, insn->alop.src4, IN_S, cluster);
+    if (insn->alop.cond)
+      sched_use_pred(as, insn, insn->alop.cond, IN_RLP);
+    if (insn->alop.mrgc)
+      sched_use_pred(as, insn, insn->alop.mrgc, IN_RLP);
+    break;
+  }
+}
+
+static E2kCycle sched_max_cycle(E2kCycle t0, E2kCycle t1)
+{
+  return t0 < t1 ? t1 : t0;
+}
+
+static int sched_cycles_to_ready_gpr(ASMState *as, E2kInsn *insn, int rid,
+                                     int cluster)
+{
+  static const E2kIn map[4] = { IN_I, IN_F, IN_F, IN_S };
+  const E2kReservation *res;
+  E2kUseGpr *use;
+  E2kCycle max = 0;
+  lj_assertA(rid < RID_MAX, "expect gpr");
+  use = as->sched.use_gpr + rid;
+  if (use->used) {
+    res = e2kres + e2kop[insn->op].type;
+    for (int i = 0; i < USE_GPR_LEN; i++) {
+      if (use->src[i]) {
+        E2kIn in = map[i / 2];
+        if ((i & 1) != cluster)
+          in = in == IN_S ? IN_S_C : IN_R;
+        max = sched_max_cycle(max, use->src[i] + sched_latency(res, in));
+      }
+    }
+  }
+  /* TODO: sched: cluster hint (any, cluster0, cluster1) */
+  return max - as->sched.cycle;
+}
+
+static int sched_cycles_to_ready_pred(ASMState *as, E2kInsn *insn, int rid)
+{
+  const E2kReservation *res;
+  E2kUsePred *use;
+  E2kCycle max = 0;
+  lj_assertA(rid >= RID_PRED0 && rid <= RID_PRED_MAX, "expect pred");
+  use = as->sched.use_pred + (rid - RID_PRED0);
+  res = e2kres + e2kop[insn->op].type;
+  if (use->rlp)
+    max = use->rlp + sched_latency(res, IN_RLP);
+  if (use->ct)
+    max = sched_max_cycle(max, use->ct + sched_latency(res, IN_CT));
+  return max - as->sched.cycle;
+}
+
+static int sched_cycles_to_ready_ctpr(ASMState *as, E2kInsn *insn, int rid)
+{
+  const E2kReservation *res;
+  E2kUseCtpr *use;
+  E2kCycle max = 0;
+
+  lj_assertA(rid >= RID_CTPR1 && rid <= RID_CTPR_MAX, "expect ctpr");
+  use = as->sched.use_ctpr + (rid - RID_CTPR1);
+  res = e2kres + e2kop[insn->op].type;
+  if (use->ct)
+    max = use->ct + sched_latency(res, IN_CT);
+  return max - as->sched.cycle;
+}
+
+/* Returns the number of cycles relative to the current cycle when
+ * an instruction can be issued without lock contention. */
+static int sched_cycles_to_ready(ASMState *as, E2kInsn *insn, int cluster)
+{
+  switch (insn->op) {
+  case E2K_INSN_DISP:
+  case E2K_INSN_PREPCALL:
+    return sched_cycles_to_ready_ctpr(as, insn, insn->disp.ctpr);
+  case E2K_INSN_CT:
+  case E2K_INSN_IBRANCH:
+  case E2K_INSN_CALL:
     return 0;
+  default:
+    lj_assertA(insn->op < E2K_ALOP_END, "expect alop");
+    if (insn->alop.flags & ALOP_DST_GPR) {
+      if (insn->alop.dst < RID_MAX)
+        return sched_cycles_to_ready_gpr(as, insn, insn->alop.dst, cluster);
+      else
+        return sched_cycles_to_ready_ctpr(as, insn, insn->alop.dst);
+    }
+    else if (insn->alop.flags & ALOP_DST_PRED)
+      return sched_cycles_to_ready_pred(as, insn, insn->alop.dst);
+    return 0;
+  }
+}
+
+static void sched_use_reset(ASMState *as, int rid)
+{
+  if (rid < RID_MAX) {
+    memset(&as->sched.use_gpr[rid], 0, sizeof(*as->sched.use_gpr));
+  } else if (rid >= RID_PRED0 && rid <= RID_PRED_MAX) {
+    rid -= RID_PRED0;
+    memset(&as->sched.use_pred[rid], 0, sizeof(*as->sched.use_pred));
+  } else if (rid >= RID_CTPR1 && rid <= RID_CTPR_MAX) {
+    rid -= RID_CTPR1;
+    memset(&as->sched.use_ctpr[rid], 0, sizeof(*as->sched.use_ctpr));
+  } else {
+    lj_assertA(0, "unexpected register ID");
+    abort();
+  }
+}
+
+static void sched_issued(ASMState *as, E2kInsn *insn)
+{
+  switch (insn->op) {
+  case E2K_INSN_DISP:
+  case E2K_INSN_PREPCALL:
+    sched_use_reset(as, insn->disp.ctpr);
+    break;
+  case E2K_INSN_CT:
+  case E2K_INSN_IBRANCH:
+  case E2K_INSN_CALL:
+    break;
+  default:
+    lj_assertA(insn->op < E2K_ALOP_END, "expect alop");
+    if (insn->alop.flags & (ALOP_DST_GPR | ALOP_DST_PRED))
+      sched_use_reset(as, insn->alop.dst);
+    break;
+  }
+}
+
+/* Adds an instruction to the bundle.  */
+static int sched_bundle_insn(ASMState *as, const E2kInsn *insn)
+{
+  int als_idx = 0, src1, src2, src3, dst;
 
   switch (insn->op) {
   case E2K_INSN_DISP:
-    bundle_disp(as, insn->disp.ctpr, insn->disp.target, &as->mcp);
+    bundle_disp(as, insn->disp.ctpr, insn->disp.target, 0);
     break;
   case E2K_INSN_PREPCALL:
-    bundle_prepcall(as, insn->disp.ctpr, insn->disp.target, &as->mcp);
+    bundle_prepcall(as, insn->disp.ctpr, insn->disp.target, 0);
     break;
   case E2K_INSN_CT:
-    bundle_ct(as, insn->ct.ctpr, insn->ct.pred, insn->ct.inverted, &as->mcp);
+    bundle_ct(as, insn->ct.ctpr, insn->ct.pred, insn->ct.inverted, 0);
     break;
   case E2K_INSN_IBRANCH:
     bundle_ibranch(as, insn->ibranch.target, insn->ibranch.pred,
-                   insn->ibranch.inverted, &as->mcp);
+                   insn->ibranch.inverted, 0);
     break;
   case E2K_INSN_CALL:
     bundle_call(as, insn->call.ctpr, insn->call.pred, insn->call.inverted,
-                insn->call.wbs, &as->mcp);
+                insn->call.wbs, 0);
     break;
   default:
-    lj_assertA(insn->op < E2K_ALOP_END, "unimplemented emit %s", e2kop[insn->op].name);
+    lj_assertA(insn->op < E2K_ALOP_END, "expect alop");
 
     if (insn->alop.flags & ALOP_SRC1_GPR)
       src1 = RSRC1(insn->alop.src1);
@@ -819,24 +1124,55 @@ static int sched_emit_single_insn(ASMState *as)
       bundle_mrgc(as, als_idx, insn->alop.mrgc,
                   insn->alop.flags & ALOP_MRGC_INV ? 1 : 0, 0);
     }
-
-    bundle_finalize(as, &as->mcp);
     break;
   }
+
+  return als_idx;
+}
+
+/* Emit a single instruction from the sched queue.  */
+static int sched_emit_single_insn(ASMState *as)
+{
+  int als_idx, nops;
+  E2kInsn *insn = as->sched.tail;
+
+  /* Nothing to emit. */
+  if (!insn)
+    return 0;
+
+  als_idx = sched_bundle_insn(as, insn);
+  if (as->sched.enable & E2K_SCHED_NOPS) {
+    nops = sched_cycles_to_ready(as, insn, ALC_CLUSTER(als_idx));
+    if (nops < 0)
+      nops = 0;
+    else
+      as->sched.cycle += nops;
+    bundle_nop(as, nops);
+  }
+  bundle_finalize(as, &as->mcp);
 
 #ifdef LUA_USE_ASSERT
   if (as->sched.dbg) {
     fprintf(stderr, "%08lx: ", (uintptr_t) as->mcp);
     sched_dump_insn(as, insn);
     fputc('\n', stderr);
+    if (nops)
+      fprintf(stderr, "%9s NOP %d\n", "", nops);
   }
 #endif
 
+  if (as->sched.enable & E2K_SCHED_NOPS) {
+    sched_issued(as, insn);
+    sched_use(as, insn, ALC_CLUSTER(als_idx));
+    as->sched.cycle += 1;
+  }
+
   sched_remove(as, insn);
+
   return 1;
 }
 
-static int sched_emit_bundle(ASMState *as)
+static int sched_emit(ASMState *as)
 {
   return sched_emit_single_insn(as);
 }
@@ -850,7 +1186,7 @@ static MCode *emit_serializef(ASMState *as, const char *reason)
       sched_dbg(as, "---- SERIALIZE START");
 
     /* Write all pending insns to memory. */
-    while (sched_emit_bundle(as));
+    while (sched_emit(as));
 
     as->sched.overflow = 0;
   }
@@ -869,7 +1205,7 @@ static E2kInsn *sched_alloc(ASMState *as, int op)
       sched_dbg(as, "---- OVERFLOW START");
       as->sched.overflow = 1;
     }
-    sched_emit_bundle(as);
+    sched_emit(as);
   }
 
   /* Take insn from free list. */
