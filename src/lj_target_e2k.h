@@ -381,10 +381,9 @@ typedef enum E2kAlopFlags {
   ALOP_SRC2_LIT   = 1u << 3,
   ALOP_SRC3_GPR   = 1u << 4,
   ALOP_SRC4_GPR   = 1u << 5,
-  ALOP_DST_GPR    = 1u << 6,
-  ALOP_DST_PRED   = 1u << 7,
-  ALOP_COND_INV   = 1u << 8,
-  ALOP_MRGC_INV   = 1u << 9,
+  ALOP_DST_REG    = 1u << 6,
+  ALOP_COND_INV   = 1u << 7,
+  ALOP_MRGC_INV   = 1u << 8,
 } E2kAlopFlags;
 
 struct E2kInsn {

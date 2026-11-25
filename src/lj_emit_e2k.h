@@ -819,7 +819,7 @@ static void sched_dump_insn(ASMState *as, E2kInsn *insn)
     else
       fprintf(stderr, ", 0x%x", insn->alop.src3);
 
-    if (insn->alop.flags & (ALOP_DST_GPR | ALOP_DST_PRED | ALOP_SRC4_GPR))
+    if (insn->alop.flags & (ALOP_DST_REG | ALOP_SRC4_GPR))
       fprintf(stderr, ", %s", sched_reg_name(insn->alop.dst));
     else
       fprintf(stderr, ", %#x", insn->alop.dst);
@@ -1009,7 +1009,7 @@ static int sched_cycles_to_ready(ASMState *as, E2kInsn *insn, int cluster)
     return 0;
   default:
     lj_assertA(insn->op < E2K_ALOP_END, "expect alop");
-    if (insn->alop.flags & (ALOP_DST_GPR | ALOP_DST_PRED)) {
+    if (insn->alop.flags & ALOP_DST_REG) {
       if (RID_IS_GPR(insn->alop.dst))
         return sched_cycles_to_ready_gpr(as, insn, insn->alop.dst, cluster);
       else if (RID_IS_PRED(insn->alop.dst))
@@ -1051,7 +1051,7 @@ static void sched_issued(ASMState *as, E2kInsn *insn)
     break;
   default:
     lj_assertA(insn->op < E2K_ALOP_END, "expect alop");
-    if (insn->alop.flags & (ALOP_DST_GPR | ALOP_DST_PRED))
+    if (insn->alop.flags & ALOP_DST_REG)
       sched_use_reset(as, insn->alop.dst);
     break;
   }
@@ -1100,7 +1100,7 @@ static int sched_bundle_insn(ASMState *as, const E2kInsn *insn)
     else
       src3 = insn->alop.src3;
 
-    if (insn->alop.flags & (ALOP_DST_GPR | ALOP_DST_PRED)) {
+    if (insn->alop.flags & ALOP_DST_REG) {
       if (RID_IS_GPR(insn->alop.dst))
         dst = RDST(insn->alop.dst);
       else if (RID_IS_PRED(insn->alop.dst))
@@ -1266,7 +1266,7 @@ static void emit_alopf7_rr(ASMState *as, int spec, uint32_t op, int src1,
                            int src2, int pdst)
 {
   if (as->sched.enable) {
-    int flags = ALOP_SRC1_GPR | ALOP_SRC2_GPR | ALOP_DST_PRED;
+    int flags = ALOP_SRC1_GPR | ALOP_SRC2_GPR | ALOP_DST_REG;
     emit_alop(as, spec, flags, op, src1, src2, 0, pdst);
   } else
     bundle_alopf7_rr(as, spec, op, src1, src2, pdst, &as->mcp);
@@ -1276,7 +1276,7 @@ static void emit_alopf7_ri(ASMState *as, int spec, uint32_t op, int src1,
                            int64_t src2, int pdst)
 {
   if (as->sched.enable) {
-    int flags = ALOP_SRC1_GPR | ALOP_DST_PRED;
+    int flags = ALOP_SRC1_GPR | ALOP_DST_REG;
     emit_alop_i(as, spec, flags, op, src1, src2, 0, pdst);
   } else
     bundle_alopf7_ri(as, spec, op, src1, src2, pdst, &as->mcp);
@@ -1299,7 +1299,7 @@ static void emit_alopf2_r_rlp(ASMState *as, int spec, uint32_t op, int src2,
                               int dst, int pred, int inv)
 {
   if (as->sched.enable) {
-    int flags = ALOP_SRC2_GPR | ALOP_DST_GPR;
+    int flags = ALOP_SRC2_GPR | ALOP_DST_REG;
     if (inv) flags |= ALOP_COND_INV;
     emit_alop(as, spec, flags, op, 0, src2, 0, dst)
       ->alop.cond = pred;
@@ -1313,7 +1313,7 @@ static void emit_alopf2_i(ASMState *as, int spec, uint32_t op, int64_t src2,
                           int dst)
 {
   if (as->sched.enable) {
-    int flags = ALOP_DST_GPR;
+    int flags = ALOP_DST_REG;
     emit_alop_i(as, spec, flags, op, 0, src2, 0, dst);
   } else
     bundle_alopf2_i(as, spec, op, src2, dst, &as->mcp);
@@ -1323,7 +1323,7 @@ static void emit_alopf2_r(ASMState *as, int spec, uint32_t op, int src2,
                           int dst)
 {
   if (as->sched.enable) {
-    int flags = ALOP_SRC2_GPR | ALOP_DST_GPR;
+    int flags = ALOP_SRC2_GPR | ALOP_DST_REG;
     emit_alop(as, spec, flags, op, 0, src2, 0, dst);
   } else
     bundle_alopf2_r(as, spec, op, src2, dst, &as->mcp);
@@ -1333,7 +1333,7 @@ static void emit_alopf21_rrr(ASMState *as, int spec, uint32_t op, int src1,
                              int src2, int src3, int dst)
 {
   if (as->sched.enable) {
-    int flags = ALOP_SRC1_GPR | ALOP_SRC2_GPR | ALOP_SRC3_GPR | ALOP_DST_GPR;
+    int flags = ALOP_SRC1_GPR | ALOP_SRC2_GPR | ALOP_SRC3_GPR | ALOP_DST_REG;
     emit_alop(as, spec, flags, op, src1, src2, src3, dst);
   } else
     bundle_alopf21_rrr(as, spec, op, src1, src2, src3, dst, &as->mcp);
@@ -1348,7 +1348,7 @@ static void emit_alopf1_rr(ASMState *as, int spec, uint32_t op, int src1,
                            int src2, int dst)
 {
   if (as->sched.enable) {
-    int flags = ALOP_SRC1_GPR | ALOP_SRC2_GPR | ALOP_DST_GPR;
+    int flags = ALOP_SRC1_GPR | ALOP_SRC2_GPR | ALOP_DST_REG;
     emit_alop(as, spec, flags, op, src1, src2, 0, dst);
   } else
     bundle_alopf1_rr(as, spec, op, src1, src2, dst, &as->mcp);
@@ -1358,7 +1358,7 @@ static void emit_alopf1_rr_mrgc(ASMState *as, int spec, uint32_t op, int src1,
                                 int src2, int dst, int pred, int inv)
 {
   if (as->sched.enable) {
-    int flags = ALOP_SRC1_GPR | ALOP_SRC2_GPR | ALOP_DST_GPR;
+    int flags = ALOP_SRC1_GPR | ALOP_SRC2_GPR | ALOP_DST_REG;
     if (inv) flags |= ALOP_MRGC_INV;
     emit_alop(as, spec, flags, op, src1, src2, 0, dst)
       ->alop.mrgc = pred;
@@ -1372,7 +1372,7 @@ static void emit_alopf1_ri_rlp(ASMState *as, int spec, uint32_t op, int src1,
                                int64_t src2, int dst, int pred, int inv)
 {
   if (as->sched.enable) {
-    int flags = ALOP_SRC1_GPR | ALOP_DST_GPR;
+    int flags = ALOP_SRC1_GPR | ALOP_DST_REG;
     if (inv) flags |= ALOP_COND_INV;
     emit_alop_i(as, spec, flags, op, src1, src2, 0, dst)
       ->alop.cond = pred;
@@ -1386,7 +1386,7 @@ static void emit_alopf1_ir(ASMState *as, int spec, uint32_t op, uint8_t src1,
                            int src2, int dst)
 {
   if (as->sched.enable) {
-    int flags = ALOP_SRC2_GPR | ALOP_DST_GPR;
+    int flags = ALOP_SRC2_GPR | ALOP_DST_REG;
     emit_alop(as, spec, flags, op, ISRC1(src1), src2, 0, dst);
   } else
     bundle_alopf1_ir(as, spec, op, src1, src2, dst, &as->mcp);
@@ -1396,7 +1396,7 @@ static void emit_alopf1_ri(ASMState *as, int spec, uint32_t op, int src1,
                            int64_t src2, int dst)
 {
   if (as->sched.enable) {
-    int flags = ALOP_SRC1_GPR | ALOP_DST_GPR;
+    int flags = ALOP_SRC1_GPR | ALOP_DST_REG;
     emit_alop_i(as, spec, flags, op, src1, src2, 0, dst);
   } else
     bundle_alopf1_ri(as, spec, op, src1, src2, dst, &as->mcp);
@@ -1406,7 +1406,7 @@ static void emit_alopf1_ii(ASMState *as, int spec, uint32_t op, uint8_t src1,
                            int64_t src2, int dst)
 {
   if (as->sched.enable) {
-    int flags = ALOP_DST_GPR;
+    int flags = ALOP_DST_REG;
     emit_alop_i(as, spec, flags, op, ISRC1(src1), src2, 0, dst);
   } else
     bundle_alopf1_ii(as, spec, op, src1, src2, dst, &as->mcp);
