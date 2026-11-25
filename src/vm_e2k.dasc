@@ -4658,7 +4658,7 @@ static void build_subroutines(BuildCtx *ctx)
     |// DISPATCH and STACK preserved on-trace
     |->vm_exit_handler:
     |.if JIT
-    | getsp     0, -320, T2
+    | getsp     0, -0x1c0, T2
     | ldd       2, DISPATCH, DISPATCH_GL(cur_L), T3
     | disp      ctpr1, extern lj_trace_exit
     | --
@@ -4727,6 +4727,29 @@ static void build_subroutines(BuildCtx *ctx)
     | --
     | stdsm     2, T2, 0x130, r30
     | stdsm     5, T2, 0x138, r31
+    | --
+    | // Skip fixed temp registers:
+    | //   0x140: g16 (T0, RID_TMP1)
+    | //   0x148: g17 (T1, RID_TMP2)
+    | //   0x150: g18 (T2, RID_TMP3)
+    | //   0x158: g19 (T3, RID_TMP4)
+    | stdsm     2, T2, 0x160, g20
+    | stdsm     5, T2, 0x168, g21
+    | --
+    | stdsm     2, T2, 0x170, g22
+    | stdsm     5, T2, 0x178, g23
+    | --
+    | stdsm     2, T2, 0x180, g24
+    | stdsm     5, T2, 0x188, g25
+    | --
+    | stdsm     2, T2, 0x190, g26
+    | stdsm     5, T2, 0x198, g27
+    | --
+    | stdsm     2, T2, 0x1a0, g28
+    | stdsm     5, T2, 0x1a8, g29
+    | --
+    | stdsm     2, T2, 0x1b0, g30
+    | stdsm     5, T2, 0x1b8, g31
     | --
     | addd      0, DISPATCH, GG_DISP2J, CARG1
     | addd      1, T2, 0x0, CARG2

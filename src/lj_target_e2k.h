@@ -35,7 +35,7 @@ enum {
   RID_MAX,
   NGPRDEF(RIDENUM) /* Predicates and control flow registers */
   RID_TMP  = RID_G16, /* Keep in sync with E2K_REG_EXITNO */
-  RID_TMP1 = RID_G16,
+  RID_TMP1 = RID_G16, /* Keep in sync with vm_exit_handler */
   RID_TMP2 = RID_G17,
   RID_TMP3 = RID_G18,
   RID_TMP4 = RID_G19,
@@ -56,7 +56,7 @@ enum {
   RID_MIN_G = RID_G16,
   RID_MAX_G = RID_G31 + 1,
   RID_MIN_GPR = RID_MIN_B,
-  RID_MAX_GPR = RID_MAX_R,
+  RID_MAX_GPR = RID_MAX_G,
   RID_MIN_FPR = 0,
   RID_MAX_FPR = 0,
   RID_MIN_PRED = RID_PRED0,
@@ -89,13 +89,15 @@ enum {
 /* -- Register sets ------------------------------------------------------- */
 
 #define RSET_FIXED \
-    (RID2RSET(RID_SP)|RID2RSET(RID_DISPATCH)|RID2RSET(RID_LPC))
+    (RID2RSET(RID_SP)|RID2RSET(RID_DISPATCH)|RID2RSET(RID_LPC) \
+    |RSET_RANGE(RID_G16, RID_G20))
 #define RSET_GPR    (RSET_RANGE(RID_MIN_GPR, RID_MAX_GPR) - RSET_FIXED)
 #define RSET_FPR    0
 #define RSET_ALL    RSET_GPR
 #define RSET_INIT   RSET_ALL
 
-#define RSET_SCRATCH_GPR  (RSET_RANGE(RID_MIN_B, RID_MAX_B))
+#define RSET_SCRATCH_GPR  (RSET_RANGE(RID_MIN_B, RID_MAX_B) \
+                          |RSET_RANGE(RID_G20, RID_MAX_G))
 #define RSET_SCRATCH_FPR  0
 #define RSET_SCRATCH    (RSET_SCRATCH_GPR|RSET_SCRATCH_FPR)
 
