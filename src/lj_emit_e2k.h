@@ -130,15 +130,15 @@ static intptr_t get_kval(ASMState *as, IRRef ref)
 static E2kOpT get_reg_type(ASMState *as, intptr_t val)
 {
   UNUSED(as);
-  if (val <= RID_B7)
+  if (RID_IS_B(val))
     return E2K_REG_B;
-  else if (val <= RID_R31)
+  else if (RID_IS_R(val))
     return E2K_REG_R;
-  else if (val <= RID_G19)
+  else if (RID_IS_G(val))
     return E2K_REG_G;
-  else if (val <= RID_PRED3)
+  else if (RID_IS_PRED(val))
     return E2K_REG_PRED;
-  else if (val <= RID_CTPR3)
+  else if (RID_IS_CTPR(val))
     return E2K_REG_CTPR;
   else
     lj_assertA(0, "bad register (%d)", val);
@@ -424,7 +424,7 @@ static uint32_t bundle_pdst(ASMState *as, E2kOpT type, intptr_t pred)
 {
   UNUSED(as);
   if (type == E2K_REG_PRED) {
-    return pred - RID_PRED1 + 1;
+    return pred - RID_PRED0;
   } else {
     lj_assertA(0, "bad reg for pdst (%d)", pred);
     return 0;
@@ -842,8 +842,8 @@ static void sched_use_gpr(ASMState *as, E2kInsn *insn, int rid, E2kIn in, int cl
 {
   E2kUseGpr *use;
   int index;
-  lj_assertA(rid < RID_MAX, "expect gpr");
-  use = as->sched.use_gpr + rid;
+  lj_assertA(RID_IS_GPR(rid), "expect gpr");
+  use = &as->sched.use_gpr[rid - RID_MIN_GPR];
   use->used = 1;
   if (in == IN_R) {
     switch (e2kres[e2kop[insn->op].type].unit) {
@@ -869,8 +869,8 @@ static void sched_use_gpr(ASMState *as, E2kInsn *insn, int rid, E2kIn in, int cl
 static void sched_use_pred(ASMState *as, E2kInsn *insn, int rid, E2kIn in)
 {
   E2kUsePred *use;
-  lj_assertA(rid >= RID_PRED0 && rid <= RID_PRED_MAX, "expect pred");
-  use = as->sched.use_pred + (rid - RID_PRED0);
+  lj_assertA(RID_IS_PRED(rid), "expect pred");
+  use = &as->sched.use_pred[rid - RID_MIN_PRED];
   switch (in) {
   case IN_RLP:
     use->rlp = as->sched.cycle;
@@ -887,8 +887,8 @@ static void sched_use_pred(ASMState *as, E2kInsn *insn, int rid, E2kIn in)
 static void sched_use_ctpr(ASMState *as, E2kInsn *insn, int rid, E2kIn in)
 {
   E2kUseCtpr *use;
-  lj_assertA(rid >= RID_CTPR1 && rid <= RID_CTPR_MAX, "expect ctpr");
-  use = as->sched.use_ctpr + (rid - RID_CTPR1);
+  lj_assertA(RID_IS_CTPR(rid), "expect ctpr");
+  use = &as->sched.use_ctpr[rid - RID_MIN_CTPR];
   switch (in) {
   case IN_CT:
     use->ct = as->sched.cycle;
@@ -949,8 +949,8 @@ static int sched_cycles_to_ready_gpr(ASMState *as, E2kInsn *insn, int rid,
   const E2kReservation *res;
   E2kUseGpr *use;
   E2kCycle max = 0;
-  lj_assertA(rid < RID_MAX, "expect gpr");
-  use = as->sched.use_gpr + rid;
+  lj_assertA(RID_IS_GPR(rid), "expect gpr");
+  use = &as->sched.use_gpr[rid - RID_MIN_GPR];
   if (use->used) {
     res = e2kres + e2kop[insn->op].type;
     for (int i = 0; i < USE_GPR_LEN; i++) {
@@ -971,8 +971,8 @@ static int sched_cycles_to_ready_pred(ASMState *as, E2kInsn *insn, int rid)
   const E2kReservation *res;
   E2kUsePred *use;
   E2kCycle max = 0;
-  lj_assertA(rid >= RID_PRED0 && rid <= RID_PRED_MAX, "expect pred");
-  use = as->sched.use_pred + (rid - RID_PRED0);
+  lj_assertA(RID_IS_PRED(rid), "expect pred");
+  use = &as->sched.use_pred[rid - RID_MIN_PRED];
   res = e2kres + e2kop[insn->op].type;
   if (use->rlp)
     max = use->rlp + sched_latency(res, IN_RLP);
@@ -987,8 +987,8 @@ static int sched_cycles_to_ready_ctpr(ASMState *as, E2kInsn *insn, int rid)
   E2kUseCtpr *use;
   E2kCycle max = 0;
 
-  lj_assertA(rid >= RID_CTPR1 && rid <= RID_CTPR_MAX, "expect ctpr");
-  use = as->sched.use_ctpr + (rid - RID_CTPR1);
+  lj_assertA(RID_IS_CTPR(rid), "expect ctpr");
+  use = &as->sched.use_ctpr[rid - RID_MIN_CTPR];
   res = e2kres + e2kop[insn->op].type;
   if (use->ct)
     max = use->ct + sched_latency(res, IN_CT);
@@ -1009,32 +1009,33 @@ static int sched_cycles_to_ready(ASMState *as, E2kInsn *insn, int cluster)
     return 0;
   default:
     lj_assertA(insn->op < E2K_ALOP_END, "expect alop");
-    if (insn->alop.flags & ALOP_DST_GPR) {
-      if (insn->alop.dst < RID_MAX)
+    if (insn->alop.flags & (ALOP_DST_GPR | ALOP_DST_PRED)) {
+      if (RID_IS_GPR(insn->alop.dst))
         return sched_cycles_to_ready_gpr(as, insn, insn->alop.dst, cluster);
-      else
+      else if (RID_IS_PRED(insn->alop.dst))
+        return sched_cycles_to_ready_pred(as, insn, insn->alop.dst);
+      else if (RID_IS_CTPR(insn->alop.dst))
         return sched_cycles_to_ready_ctpr(as, insn, insn->alop.dst);
+      else
+        abort();
     }
-    else if (insn->alop.flags & ALOP_DST_PRED)
-      return sched_cycles_to_ready_pred(as, insn, insn->alop.dst);
     return 0;
   }
 }
 
 static void sched_use_reset(ASMState *as, int rid)
 {
-  if (rid < RID_MAX) {
-    memset(&as->sched.use_gpr[rid], 0, sizeof(*as->sched.use_gpr));
-  } else if (rid >= RID_PRED0 && rid <= RID_PRED_MAX) {
-    rid -= RID_PRED0;
-    memset(&as->sched.use_pred[rid], 0, sizeof(*as->sched.use_pred));
-  } else if (rid >= RID_CTPR1 && rid <= RID_CTPR_MAX) {
-    rid -= RID_CTPR1;
-    memset(&as->sched.use_ctpr[rid], 0, sizeof(*as->sched.use_ctpr));
-  } else {
-    lj_assertA(0, "unexpected register ID");
+  if (RID_IS_GPR(rid))
+    memset(&as->sched.use_gpr[rid - RID_MIN_GPR], 0,
+           sizeof(*as->sched.use_gpr));
+  else if (RID_IS_PRED(rid))
+    memset(&as->sched.use_pred[rid - RID_MIN_PRED], 0,
+           sizeof(*as->sched.use_pred));
+  else if (RID_IS_CTPR(rid))
+    memset(&as->sched.use_ctpr[rid - RID_MIN_CTPR], 0,
+           sizeof(*as->sched.use_ctpr));
+  else
     abort();
-  }
 }
 
 static void sched_issued(ASMState *as, E2kInsn *insn)
@@ -1099,11 +1100,16 @@ static int sched_bundle_insn(ASMState *as, const E2kInsn *insn)
     else
       src3 = insn->alop.src3;
 
-    if (insn->alop.flags & ALOP_DST_GPR)
-      dst = RDST(insn->alop.dst);
-    else if (insn->alop.flags & ALOP_DST_PRED)
-      dst = PDST(insn->alop.dst);
-    else if (insn->alop.flags & ALOP_SRC4_GPR)
+    if (insn->alop.flags & (ALOP_DST_GPR | ALOP_DST_PRED)) {
+      if (RID_IS_GPR(insn->alop.dst))
+        dst = RDST(insn->alop.dst);
+      else if (RID_IS_PRED(insn->alop.dst))
+        dst = PDST(insn->alop.dst);
+      else if (RID_IS_CTPR(insn->alop.dst))
+        dst = RDST(insn->alop.dst);
+      else
+       abort();
+    } else if (insn->alop.flags & ALOP_SRC4_GPR)
       dst = RSRC4(insn->alop.src4);
     else
       dst = insn->alop.dst;

@@ -19,9 +19,9 @@
    _(R8)  _(R9) _(R10) _(R11) _(R12) _(R13) _(R14) _(R15) \
   _(R16) _(R17) _(R18) _(R19) _(R20) _(R21) _(R22) _(R23) \
   _(R24) _(R25) _(R26) _(R27) _(R28) _(R29) _(R30) _(R31) \
-  _(G16) _(G17) _(G18) _(G19)
+  _(G16) _(G17) _(G18) _(G19) _(G20) _(G21) _(G22) _(G23) \
+  _(G24) _(G25) _(G26) _(G27) _(G28) _(G29) _(G30) _(G31)
 
-/* Keep in sync with RID_MAX_PRED and RID_MAX_CTPR. */
 #define NGPRDEF(_) \
   _(PRED0)  _(PRED1)  _(PRED2)  _(PRED3) \
   _(CTPR1) _(CTPR2) _(CTPR3)
@@ -34,8 +34,6 @@ enum {
   GPRDEF(RIDENUM)  /* Directly addressable, rotating and global registers */
   RID_MAX,
   NGPRDEF(RIDENUM) /* Predicates and control flow registers */
-  RID_PRED_MAX = RID_PRED3,
-  RID_CTPR_MAX = RID_CTPR3,
   RID_TMP  = RID_G16, /* Keep in sync with E2K_REG_EXITNO */
   RID_TMP1 = RID_G16,
   RID_TMP2 = RID_G17,
@@ -51,14 +49,39 @@ enum {
   RID_RET = RID_B0,
   RID_FPRET = RID_B0,
 
-  RID_MIN_GPR = RID_B0,
-  RID_MAX_GPR = RID_R31 + 1,
+  RID_MIN_B = RID_B0,
+  RID_MAX_B = RID_B7 + 1,
+  RID_MIN_R = RID_R0,
+  RID_MAX_R = RID_R31 + 1,
+  RID_MIN_G = RID_G16,
+  RID_MAX_G = RID_G31 + 1,
+  RID_MIN_GPR = RID_MIN_B,
+  RID_MAX_GPR = RID_MAX_R,
   RID_MIN_FPR = 0,
-  RID_MAX_FPR = RID_MIN_FPR,
+  RID_MAX_FPR = 0,
+  RID_MIN_PRED = RID_PRED0,
+  RID_MAX_PRED = RID_PRED3 + 1,
+  RID_MIN_CTPR = RID_CTPR1,
+  RID_MAX_CTPR = RID_CTPR3 + 1,
 
+  RID_NUM_B = RID_MAX_B - RID_MIN_B,
+  RID_NUM_R = RID_MAX_R - RID_MIN_R,
+  RID_NUM_G = RID_MAX_G - RID_MIN_G,
+  /* This definition must match with the *.dasc file(s).
+   * See ->vm_exit_handler. */
   RID_NUM_GPR = RID_MAX_GPR - RID_MIN_GPR,
-  RID_NUM_FPR = RID_MAX_FPR - RID_MIN_FPR
+  RID_NUM_FPR = RID_MAX_FPR - RID_MIN_FPR,
+  RID_NUM_PRED = RID_MAX_PRED - RID_MIN_PRED,
+  RID_NUM_CTPR = RID_MAX_CTPR - RID_MIN_CTPR
 };
+
+#define RID_IN_RANGE(rid, min, max) ((rid) >= (min) && (rid) < (max))
+#define RID_IS_B(rid)     RID_IN_RANGE(rid, RID_MIN_B, RID_MAX_B)
+#define RID_IS_R(rid)     RID_IN_RANGE(rid, RID_MIN_R, RID_MAX_R)
+#define RID_IS_G(rid)     RID_IN_RANGE(rid, RID_MIN_G, RID_MAX_G)
+#define RID_IS_GPR(rid)   RID_IN_RANGE(rid, RID_MIN_B, RID_MAX_G)
+#define RID_IS_PRED(rid)  RID_IN_RANGE(rid, RID_MIN_PRED, RID_MAX_PRED)
+#define RID_IS_CTPR(rid)  RID_IN_RANGE(rid, RID_MIN_CTPR, RID_MAX_CTPR)
 
 #define RID_NUM_KREF		RID_NUM_GPR
 #define RID_MIN_KREF		RID_B0
@@ -67,13 +90,13 @@ enum {
 
 #define RSET_FIXED \
     (RID2RSET(RID_SP)|RID2RSET(RID_DISPATCH)|RID2RSET(RID_LPC))
-#define RSET_GPR    (RSET_RANGE(RID_B0, RID_R31+1) - RSET_FIXED)
+#define RSET_GPR    (RSET_RANGE(RID_MIN_GPR, RID_MAX_GPR) - RSET_FIXED)
 #define RSET_FPR    0
 #define RSET_ALL    RSET_GPR
 #define RSET_INIT   RSET_ALL
 
+#define RSET_SCRATCH_GPR  (RSET_RANGE(RID_MIN_B, RID_MAX_B))
 #define RSET_SCRATCH_FPR  0
-#define RSET_SCRATCH_GPR  (RSET_RANGE(RID_B0, RID_B7+1))
 #define RSET_SCRATCH    (RSET_SCRATCH_GPR|RSET_SCRATCH_FPR)
 
 #define REGARG_FIRSTGPR RID_B0
@@ -443,9 +466,9 @@ typedef struct E2kSched {
   E2kInsn *head;
   E2kInsn *tail;
   E2kInsn *free;
-  E2kUseGpr use_gpr[RID_MAX];
-  E2kUsePred use_pred[RID_PRED_MAX - RID_PRED0 + 1];
-  E2kUseCtpr use_ctpr[RID_CTPR_MAX - RID_CTPR3 + 1];
+  E2kUseGpr use_gpr[RID_NUM_B + RID_NUM_R + RID_NUM_G];
+  E2kUsePred use_pred[RID_NUM_PRED];
+  E2kUseCtpr use_ctpr[RID_NUM_CTPR];
   E2kInsn insn[E2K_SCHED_WINDOW_SIZE];
 } E2kSched;
 
