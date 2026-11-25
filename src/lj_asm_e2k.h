@@ -31,7 +31,7 @@ static void asm_exitstub_setup(ASMState *as)
   MCode *mxp = as->mctop;
   bundle_ct(as, RID_CTPR1, 0, 0, 0);
   bundle_snapno(as, as->T->traceno, 0);
-  bundle_alopf3_ri(as, 0, E2K_STW, RID_SP, SPOFS_TMP, RID_TMP, &mxp);
+  bundle_alopf1_ir(as, 0, E2K_SXT, SXT_WZ, RID_TMP, RID_TMP2, &mxp);
   bundle_nop(as, 4);
   bundle_disp(as, RID_CTPR1, (MCode *) lj_vm_exit_handler, &mxp);
 
