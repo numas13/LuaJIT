@@ -1332,7 +1332,6 @@ typedef struct E2kReadyCheck {
   uint32_t pred_r;
   uint8_t ctpr_w;
   uint8_t ctpr_r;
-  uint8_t ct;
 } E2kReadyCheck;
 
 static E2kReadyCheckResult sched_ready_check_src(ASMState *as,
@@ -1412,13 +1411,18 @@ static E2kReadyCheckResult sched_ready_check_ct(ASMState *as,
                                                 int pred)
 {
   E2kReadyCheckResult res = READY_CHECK_NONE;
+  /* Stop if this branch is not the first instruction in the queue. */
   if (as->sched.ready_count)
     return READY_CHECK_STOP;
-  if (ctpr)
+  if (ctpr) {
     res |= sched_ready_check_src(as, ch, ctpr);
-  if (pred)
+    sched_ready_apply_src(as, ch, ctpr);
+  }
+  if (pred) {
     res |= sched_ready_check_src(as, ch, pred);
-  return res | READY_CHECK_LAST;
+    sched_ready_apply_src(as, ch, pred);
+  }
+  return res;
 }
 
 static E2kReadyCheckResult sched_ready_check_alop(ASMState *as,
@@ -1502,7 +1506,7 @@ static E2kReadyCheckResult sched_ready_check(ASMState *as, E2kReadyCheck *ch,
   case E2K_INSN_CT:
     return sched_ready_check_ct(as, ch, insn->ct.ctpr, insn->ct.pred);
   case E2K_INSN_IBRANCH:
-    return sched_ready_check_ct(as, ch, 0, insn->ct.pred);
+    return sched_ready_check_ct(as, ch, 0, insn->ibranch.pred);
   case E2K_INSN_CALL:
     /* TODO: sched: arguments */
     return sched_ready_check_ct(as, ch, insn->call.ctpr, insn->call.pred);
