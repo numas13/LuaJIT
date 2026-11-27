@@ -431,11 +431,11 @@ static uint32_t bundle_pdst(ASMState *as, E2kOpT type, intptr_t pred)
   }
 }
 
-static int bundle_alop(ASMState *as, MCode **p, int spec, uint32_t op,
-                       uint8_t src1, uint8_t src2, uint8_t src3, uint8_t dst)
+static int bundle_alop_with_mask(ASMState *as, MCode **p, int spec,
+                                 uint32_t op, uint8_t src1, uint8_t src2,
+                                 uint8_t src3, uint8_t dst,
+                                 E2kResourceMask mask)
 {
-  E2kInsnType type = e2kop[op].type;
-  E2kResourceMask mask = e2kres[type].mask;
   int als_idx = alloc_syllable(as, &as->bundle, mask, RES_ALS_OFFSET);
   uint32_t als = e2kop[op].als;
   als |= dst;
@@ -452,6 +452,14 @@ static int bundle_alop(ASMState *as, MCode **p, int spec, uint32_t op,
   }
   bundle_finalize(as, p);
   return als_idx;
+}
+
+static int bundle_alop(ASMState *as, MCode **p, int spec, uint32_t op,
+                       uint8_t src1, uint8_t src2, uint8_t src3, uint8_t dst)
+{
+  E2kInsnType type = e2kop[op].type;
+  E2kResourceMask mask = e2kres[type].mask;
+  return bundle_alop_with_mask(as, p, spec, op, src1, src2, src3, dst, mask);
 }
 
 static void bundle_cds(ASMState *as, int opc, int als, Reg pred, int inverted,
@@ -1056,7 +1064,8 @@ static void sched_issued(ASMState *as, E2kInsn *insn)
 }
 
 /* Adds an instruction to the bundle.  */
-static int sched_bundle_insn(ASMState *as, const E2kInsn *insn)
+static int sched_bundle_insn(ASMState *as, const E2kInsn *insn,
+                             E2kResourceMask mask)
 {
   int als_idx = 0, src1, src2, src3, dst;
 
@@ -1109,8 +1118,12 @@ static int sched_bundle_insn(ASMState *as, const E2kInsn *insn)
     else
       dst = insn->alop.dst;
 
-    als_idx = bundle_alop(as, 0, (insn->alop.flags & ALOP_SPEC) != 0,
-                          insn->op, src1, src2, src3, dst);
+    if (mask)
+      als_idx = bundle_alop_with_mask(as, 0, (insn->alop.flags & ALOP_SPEC) != 0,
+                                      insn->op, src1, src2, src3, dst, mask);
+    else
+      als_idx = bundle_alop(as, 0, (insn->alop.flags & ALOP_SPEC) != 0,
+                            insn->op, src1, src2, src3, dst);
 
     if (insn->alop.cond) {
       bundle_rlp(as, als_idx, insn->alop.cond,
@@ -1133,11 +1146,7 @@ static int sched_emit_single_insn(ASMState *as)
   int als_idx, nops;
   E2kInsn *insn = as->sched.tail;
 
-  /* Nothing to emit. */
-  if (!insn)
-    return 0;
-
-  als_idx = sched_bundle_insn(as, insn);
+  als_idx = sched_bundle_insn(as, insn, RES_NONE);
   if (as->sched.enable & E2K_SCHED_NOPS) {
     nops = sched_cycles_to_ready(as, insn, ALC_CLUSTER(als_idx));
     if (nops < 0)
@@ -1171,6 +1180,9 @@ static int sched_emit_single_insn(ASMState *as)
 
 static int sched_emit(ASMState *as)
 {
+  /* Nothing to emit. */
+  if (!as->sched.tail)
+    return 0;
   return sched_emit_single_insn(as);
 }
 
@@ -1196,7 +1208,7 @@ static E2kInsn *sched_alloc(ASMState *as, int op)
 {
   E2kInsn *insn;
 
-  /* Emit one bundle if these is no free insn. */
+  /* Emit one bundle if there is no free insn. */
   if (!as->sched.free) {
     if (!as->sched.overflow) {
       sched_dbg(as, "---- OVERFLOW START");
