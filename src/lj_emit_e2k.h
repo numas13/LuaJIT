@@ -969,6 +969,33 @@ static void sched_dump_insn(ASMState *as, E2kInsn *insn)
     break;
   }
 }
+
+static void sched_dump_queue(ASMState *as)
+{
+  E2kInsn *insn = as->sched.tail;
+  sched_dbg(as, "---- QUEUE (cycle %d)", as->sched.cycle);
+  for (int i = 0; insn; i++) {
+    fprintf(stderr, "  %2d: ", i);
+    sched_dump_insn(as, insn);
+    fputc('\n', stderr);
+    insn = insn->prev;
+  }
+}
+
+static void sched_dump_ready(ASMState *as)
+{
+  sched_dbg(as, "---- READY (cycle %d)", as->sched.cycle);
+  for (int i = 0; i < as->sched.ready_count; i++) {
+    fprintf(stderr, "  %2d: ", i);
+    sched_dump_insn(as, as->sched.ready[i].insn);
+    if (as->sched.ready[i].insn->op < E2K_ALOP_END) {
+      const char *map[] = { "any", "0", "1" };
+      uint8_t hint = as->sched.ready[i].hint;
+      fprintf(stderr, " (cluster %s)", map[hint]);
+    }
+    fputc('\n', stderr);
+  }
+}
 #endif
 
 static void sched_use_gpr(ASMState *as, E2kInsn *insn, int rid, E2kIn in, int cluster)
@@ -1285,6 +1312,278 @@ static int sched_bundle_insn(ASMState *as, const E2kInsn *insn,
   return als_idx;
 }
 
+typedef enum E2kReadyCheckResult {
+  READY_CHECK_NONE      = 0,
+  READY_CHECK_LAST      = 1 << 0,
+  READY_CHECK_STOP      = 1 << 1,
+  READY_CHECK_RAW       = 1 << 2,
+  READY_CHECK_WAR       = 1 << 3,
+  READY_CHECK_WAW       = 1 << 4,
+  READY_CHECK_CONFLICT  = READY_CHECK_STOP
+                        | READY_CHECK_RAW
+                        | READY_CHECK_WAR
+                        | READY_CHECK_WAW
+} E2kReadyCheckResult;
+
+typedef struct E2kReadyCheck {
+  RegSet gpr_w;
+  RegSet gpr_r;
+  uint32_t pred_w;
+  uint32_t pred_r;
+  uint8_t ctpr_w;
+  uint8_t ctpr_r;
+  uint8_t ct;
+} E2kReadyCheck;
+
+static E2kReadyCheckResult sched_ready_check_src(ASMState *as,
+                                                 E2kReadyCheck *ch, int rid)
+{
+  E2kReadyCheckResult ret = READY_CHECK_NONE;
+  if (RID_IS_GPR(rid)) {
+    RegSet mask = 1u << (rid - RID_MIN_GPR);
+    if (ch->gpr_w & mask)
+      ret |= READY_CHECK_WAR;
+  } else if (RID_IS_PRED(rid)) {
+    uint32_t mask = 1u << (rid - RID_MIN_PRED);
+    if (ch->pred_w & mask)
+      ret |= READY_CHECK_WAR;
+  } else if (RID_IS_CTPR(rid)) {
+    uint8_t mask = 1u << (rid - RID_MIN_CTPR);
+    if (ch->ctpr_w & mask)
+      ret |= READY_CHECK_WAR;
+  } else
+    abort();
+  return ret;
+}
+
+static void sched_ready_apply_src(ASMState *as, E2kReadyCheck *ch, int rid)
+{
+  if (RID_IS_GPR(rid))
+    ch->gpr_r |= 1u << (rid - RID_MIN_GPR);
+  else if (RID_IS_PRED(rid))
+    ch->pred_r |= 1u << (rid - RID_MIN_PRED);
+  else if (RID_IS_CTPR(rid))
+    ch->ctpr_r |= 1u << (rid - RID_MIN_CTPR);
+  else
+    abort();
+}
+
+static E2kReadyCheckResult sched_ready_check_dst(ASMState *as,
+                                                 E2kReadyCheck *ch, int rid)
+{
+  E2kReadyCheckResult ret = READY_CHECK_NONE;
+  if (RID_IS_GPR(rid)) {
+    RegSet mask = 1u << (rid - RID_MIN_GPR);
+    if (ch->gpr_r & mask)
+      ret |= READY_CHECK_RAW;
+    else if (ch->gpr_w & mask)
+      ret |= READY_CHECK_WAW;
+  } else if (RID_IS_PRED(rid)) {
+    uint32_t mask = 1u << (rid - RID_MIN_PRED);
+    if (ch->pred_r & mask)
+      ret |= READY_CHECK_RAW;
+    else if (ch->pred_w & mask)
+      ret |= READY_CHECK_WAW;
+  } else if (RID_IS_CTPR(rid)) {
+    uint8_t mask = 1u << (rid - RID_MIN_CTPR);
+    if (ch->ctpr_r & mask)
+      ret |= READY_CHECK_RAW;
+    else if (ch->ctpr_w & mask)
+      ret |= READY_CHECK_WAW;
+  } else
+    abort();
+  return ret;
+}
+
+static void sched_ready_apply_dst(ASMState *as, E2kReadyCheck *ch, int rid)
+{
+  if (RID_IS_GPR(rid))
+    ch->gpr_w |= 1u << (rid - RID_MIN_GPR);
+  else if (RID_IS_PRED(rid))
+    ch->pred_w |= 1u << (rid - RID_MIN_PRED);
+  else if (RID_IS_CTPR(rid))
+    ch->ctpr_w |= 1u << (rid - RID_MIN_CTPR);
+  else
+    abort();
+}
+
+static E2kReadyCheckResult sched_ready_check_ct(ASMState *as,
+                                                E2kReadyCheck *ch, int ctpr,
+                                                int pred)
+{
+  E2kReadyCheckResult res = READY_CHECK_NONE;
+  if (as->sched.ready_count)
+    return READY_CHECK_STOP;
+  if (ctpr)
+    res |= sched_ready_check_src(as, ch, ctpr);
+  if (pred)
+    res |= sched_ready_check_src(as, ch, pred);
+  return res | READY_CHECK_LAST;
+}
+
+static E2kReadyCheckResult sched_ready_check_alop(ASMState *as,
+                                                  E2kReadyCheck *ch,
+                                                  E2kInsn *insn)
+{
+  E2kReadyCheckResult res = READY_CHECK_NONE;
+
+  switch (e2kop[insn->op].type) {
+  case TYPE_INT:
+  case TYPE_IMUL:
+  case TYPE_ICMP:
+  case TYPE_FADD:
+  case TYPE_FMUL:
+  case TYPE_FCMP:
+  case TYPE_FMISC:
+  case TYPE_FCVT:
+  case TYPE_VINT:
+  case TYPE_LOAD:
+    break;
+  default:
+    /* Do not group unknown instructions. */
+    res |= as->sched.ready_count ? READY_CHECK_STOP : READY_CHECK_LAST;
+    break;
+  }
+
+  /* Check register usage. */
+
+  if (insn->alop.flags & ALOP_SRC1_GPR)
+    res |= sched_ready_check_src(as, ch, insn->alop.src1);
+
+  if (insn->alop.flags & ALOP_SRC2_GPR)
+    res |= sched_ready_check_src(as, ch, insn->alop.src2);
+
+  if (insn->alop.flags & ALOP_SRC3_GPR)
+    res |= sched_ready_check_src(as, ch, insn->alop.src3);
+
+  if (insn->alop.flags & ALOP_DST_REG)
+    res |= sched_ready_check_dst(as, ch, insn->alop.dst);
+  else if (insn->alop.flags & ALOP_SRC4_GPR)
+    res |= sched_ready_check_src(as, ch, insn->alop.dst);
+
+  if (insn->alop.mrgc)
+    res |= sched_ready_check_src(as, ch, insn->alop.mrgc);
+
+  if (insn->alop.cond)
+    res |= sched_ready_check_src(as, ch, insn->alop.cond);
+
+  /* Remember register usage. */
+
+  if (insn->alop.flags & ALOP_SRC1_GPR)
+    sched_ready_apply_src(as, ch, insn->alop.src1);
+
+  if (insn->alop.flags & ALOP_SRC2_GPR)
+    sched_ready_apply_src(as, ch, insn->alop.src2);
+
+  if (insn->alop.flags & ALOP_SRC3_GPR)
+    sched_ready_apply_src(as, ch, insn->alop.src3);
+
+  if (insn->alop.flags & ALOP_DST_REG)
+    sched_ready_apply_dst(as, ch, insn->alop.dst);
+  else if (insn->alop.flags & ALOP_SRC4_GPR)
+    sched_ready_apply_src(as, ch, insn->alop.dst);
+
+  if (insn->alop.mrgc)
+    sched_ready_apply_src(as, ch, insn->alop.mrgc);
+
+  if (insn->alop.cond)
+    sched_ready_apply_src(as, ch, insn->alop.cond);
+
+  return res;
+}
+
+/* Check if an instruction can be executed. */
+static E2kReadyCheckResult sched_ready_check(ASMState *as, E2kReadyCheck *ch,
+                                             E2kInsn *insn)
+{
+  switch (insn->op) {
+  case E2K_INSN_DISP:
+    return sched_ready_check_dst(as, ch, insn->disp.ctpr);
+  case E2K_INSN_CT:
+    return sched_ready_check_ct(as, ch, insn->ct.ctpr, insn->ct.pred);
+  case E2K_INSN_IBRANCH:
+    return sched_ready_check_ct(as, ch, 0, insn->ct.pred);
+  case E2K_INSN_CALL:
+    /* TODO: sched: arguments */
+    return sched_ready_check_ct(as, ch, insn->call.ctpr, insn->call.pred);
+  default:
+    lj_assertA(insn->op < E2K_ALOP_END, "unexpected %s",
+               e2kop[insn->op].name);
+    return sched_ready_check_alop(as, ch, insn);
+  }
+}
+
+/* Add an instruction to the ready list. */
+static void sched_ready_add(ASMState *as, E2kInsn *insn, uint8_t hint)
+{
+  lj_assertA(as->sched.ready_count < E2K_SCHED_READY_SIZE, "ready overflow");
+  as->sched.ready[as->sched.ready_count].insn = insn;
+  as->sched.ready[as->sched.ready_count].hint = hint;
+  as->sched.ready_count++;
+}
+
+/* Fill the ready list with instructions that are ready to be executed. */
+static int sched_ready_fill(ASMState *as)
+{
+  E2kInsn *insn = as->sched.tail;
+  E2kReadyCheck check;
+  E2kReadyCheckResult res;
+  int t, nops = 64, i;
+
+  memset(&check, 0, sizeof(check));
+  sched_dbg(as, "---- CHECK (cycle %u)", as->sched.cycle);
+  as->sched.ready_count = 0;
+  for (i = 0; insn && as->sched.ready_count < E2K_SCHED_READY_SIZE; i++) {
+    res = sched_ready_check(as, &check, insn);
+
+#ifdef LUA_USE_ASSERT
+    if (as->sched.dbg) {
+      fprintf(stderr, "  %2d: ", i);
+      sched_dump_insn(as, insn);
+      if (res) {
+        fprintf(stderr, " ----");
+        if (res & READY_CHECK_LAST)
+          fprintf(stderr, " LAST");
+        if (res & READY_CHECK_STOP)
+          fprintf(stderr, " STOP");
+        if (res & READY_CHECK_RAW)
+          fprintf(stderr, " RAW");
+        if (res & READY_CHECK_WAR)
+          fprintf(stderr, " WAR");
+        if (res & READY_CHECK_WAW)
+          fprintf(stderr, " WAW");
+      }
+      fputc('\n', stderr);
+    }
+#endif
+
+    if (res & READY_CHECK_STOP)
+      break;
+
+    if ((res & READY_CHECK_CONFLICT) == 0) {
+      uint8_t hint = 0;
+      t = sched_cycles_to_ready(as, insn, &hint);
+      /* Map earlier cycles to the current cycle. */
+      t = t < 0 ? 0 : t;
+      if (t < nops) {
+        /* Clear the ready list if this instruction can be executed earlier
+         * than what is in the ready list. */
+        as->sched.ready_count = 0;
+        nops = t;
+      }
+      if (t == nops)
+        sched_ready_add(as, insn, hint);
+    }
+
+    if (res & READY_CHECK_LAST)
+      break;
+
+    insn = insn->prev;
+  }
+
+  return nops;
+}
+
 /* Emit a single instruction from the sched queue.  */
 static int sched_emit_single_insn(ASMState *as)
 {
@@ -1332,11 +1631,182 @@ static int sched_emit_single_insn(ASMState *as)
   return 1;
 }
 
+#define READY_ALC0  0
+#define READY_ALC1  1
+#define READY_ALC2  2
+#define READY_ALC3  3
+#define READY_ALC4  4
+#define READY_ALC5  5
+#define READY_DISP  6
+#define READY_CT    7
+#define READY_MAX   8
+
+/* Emit a single bundle with ready instructions from the queue. */
+static int sched_emit_group(ASMState *as)
+{
+  E2kInsn *insn, *insns[READY_MAX] = { 0 };
+  E2kResourceMask mask;
+  int i, j, nops, count = 0, alc_count = 0, lts_size = 0, insn_lts_size;
+  uint8_t cluster_hint;
+
+#ifdef LUA_USE_ASSERT
+  if (as->sched.dbg)
+    sched_dump_queue(as);
+#endif
+
+repeat:
+  /* Fill the ready list with instructions that can be executed. */
+  nops = sched_ready_fill(as);
+  as->sched.cycle += nops;
+
+#ifdef LUA_USE_ASSERT
+  if (as->sched.dbg)
+    sched_dump_ready(as);
+#endif
+
+  lj_assertA(as->sched.ready_count, "expect ready instructions");
+
+  /* Pick instructions from the ready list. */
+  for (j = 0; j < as->sched.ready_count; j++) {
+    if (count == READY_MAX)
+      break;
+
+    insn = as->sched.ready[j].insn;
+
+    switch (insn->op) {
+      case E2K_INSN_DISP:
+        /* TODO: sched: ct and disp with the same ctpr is not allowed. */
+        if (!insns[READY_DISP] && (!insns[READY_CT] || insns[READY_CT]->op != E2K_INSN_IBRANCH)) {
+          insns[READY_DISP] = insn;
+          count += 1;
+        }
+        break;
+
+      case E2K_INSN_IBRANCH:
+        lj_assertA(!insns[READY_DISP], "unexpected disp and ibranch in bundle");
+        /* fallthrough */
+
+      case E2K_INSN_CT:
+      case E2K_INSN_CALL:
+        lj_assertA(!insns[READY_CT], "expect one ct in bundle");
+        insns[READY_CT] = insn;
+        count += 1;
+        break;
+
+      default:
+        lj_assertA(insn->op < E2K_ALOP_END, "expect alop");
+
+        /* No more space for alc instructions. */
+        if (alc_count == 6)
+          continue;
+
+        if (insn->alop.flags & ALOP_SRC2_LIT) {
+          switch (get_const_type(insn->alop.literal)) {
+            case E2K_CONST5:
+            case E2K_CONST16:
+              insn_lts_size = E2K_LTS16_SIZE;
+              break;
+            case E2K_CONST32:
+              insn_lts_size = E2K_LTS32_SIZE;
+              break;
+            case E2K_CONST64:
+              insn_lts_size = E2K_LTS64_SIZE;
+              break;
+            default:
+              lj_assertA(0, "unexpected const type");
+              abort();
+          }
+
+          /* Check if there is free space for a literal. */
+          if (lts_size + insn_lts_size > E2K_LTS_SIZE_MAX)
+            continue;
+        }
+
+        mask = e2kres[e2kop[insn->op].type].mask;
+        cluster_hint = as->sched.ready[j].hint;
+        if (cluster_hint != HINT_CLUSTER_ANY) {
+          /* Select a cluster where this instruction can be issued without
+           * pipeline stalls. */
+          mask &= cluster_hint == HINT_CLUSTER_0 ? RES_ALS_C0 : RES_ALS_C1;
+        }
+        /* Find a free als for this instruction. */
+        for (i = 6; i--;) {
+          if (!insns[i] && (mask & (RES_ALS0 << i))) {
+            insns[i] = insn;
+            count += 1;
+            alc_count += 1;
+            if (insn->alop.flags & ALOP_SRC2_LIT) {
+              lts_size += insn_lts_size;
+            }
+            break;
+          }
+        }
+        break;
+    }
+  }
+
+  if (!count) {
+    /* A special case for a single ready producer and a consumer in a different
+     * cluster. */
+    sched_dbg(as, "---- REPEAT (cycle %d)", as->sched.cycle);
+    as->sched.cycle += 1;
+    goto repeat;
+  }
+
+  sched_dbg(as, "---- EMIT  (cycle %d, nops %d)", as->sched.cycle, nops);
+  for (i = READY_MAX; i--;) {
+    if (insns[i]) {
+#ifdef LUA_USE_ASSERT
+      if (as->sched.dbg) {
+        fprintf(stderr, "  %2d: ", i);
+        sched_dump_insn(as, insns[i]);
+        fputc('\n', stderr);
+      }
+#endif
+      if (i >= READY_ALC0 && i <= READY_ALC5) {
+        sched_bundle_insn(as, insns[i], RES_ALS0 << i);
+      } else {
+        sched_bundle_insn(as, insns[i], RES_NONE);
+      }
+    }
+  }
+
+  bundle_nop(as, nops);
+  bundle_finalize(as, &as->mcp);
+
+  for (i = 0; i < READY_MAX; i++) {
+    if (insns[i])
+      sched_issued(as, insns[i]);
+  }
+
+  for (i = 0; i < READY_MAX; i++) {
+    if (insns[i]) {
+      if (i >= READY_ALC0 && i <= READY_ALC5) {
+        sched_use(as, insns[i], ALC_CLUSTER(i));
+      } else {
+        sched_use(as, insns[i], 0);
+      }
+    }
+  }
+
+  as->sched.cycle += 1;
+
+  for (i = 0; i < READY_MAX; i++) {
+    if (insns[i])
+      sched_remove(as, insns[i]);
+  }
+
+  return 1;
+}
+
+
 static int sched_emit(ASMState *as)
 {
   /* Nothing to emit. */
   if (!as->sched.tail)
     return 0;
+  if (as->sched.enable & E2K_SCHED_GROUP)
+    return sched_emit_group(as);
   return sched_emit_single_insn(as);
 }
 

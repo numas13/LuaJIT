@@ -381,8 +381,10 @@ typedef enum {
 
 #define E2K_SCHED_QUEUE   (1 << 0)
 #define E2K_SCHED_NOPS    (1 << 1)
-#define E2K_SCHED         (E2K_SCHED_NOPS | E2K_SCHED_QUEUE)
+#define E2K_SCHED_GROUP   (1 << 2)
+#define E2K_SCHED         (E2K_SCHED_GROUP | E2K_SCHED_NOPS | E2K_SCHED_QUEUE)
 #define E2K_SCHED_WINDOW_SIZE 32
+#define E2K_SCHED_READY_SIZE 8
 
 typedef struct E2kInsn E2kInsn;
 
@@ -470,10 +472,16 @@ typedef struct E2kUseCtpr {
   E2kCycle ct;
 } E2kUseCtpr;
 
+typedef struct E2kReadyInsn {
+  E2kInsn *insn;
+  uint8_t hint;
+} E2kReadyInsn;
+
 typedef struct E2kSched {
   uint8_t enable;
   uint8_t dbg;
   uint8_t overflow;
+  uint8_t ready_count;
   E2kCycle cycle;
   E2kInsn *head;
   E2kInsn *tail;
@@ -481,6 +489,7 @@ typedef struct E2kSched {
   E2kUseGpr use_gpr[RID_NUM_B + RID_NUM_R + RID_NUM_G];
   E2kUsePred use_pred[RID_NUM_PRED];
   E2kUseCtpr use_ctpr[RID_NUM_CTPR];
+  E2kReadyInsn ready[E2K_SCHED_READY_SIZE];
   E2kInsn insn[E2K_SCHED_WINDOW_SIZE];
 } E2kSched;
 

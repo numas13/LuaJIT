@@ -6,6 +6,7 @@
 /* Environment variable names for e2k scheduler. */
 #define LJ_E2K_SCHED_DISABLE        "LJ_E2K_SCHED_DISABLE"
 #define LJ_E2K_SCHED_DISABLE_NOPS   "LJ_E2K_SCHED_DISABLE_NOPS"
+#define LJ_E2K_SCHED_DISABLE_GROUP  "LJ_E2K_SCHED_DISABLE_GROUP"
 #define LJ_E2K_SCHED_DEBUG          "LJ_E2K_SCHED_DEBUG"
 
 /* -- Register allocator extensions --------------------------------------- */
@@ -1715,6 +1716,8 @@ static void asm_setup_sched(ASMState *as)
     as->sched.enable = E2K_SCHED;
     if (getenv(LJ_E2K_SCHED_DISABLE_NOPS))
       as->sched.enable &= ~E2K_SCHED_NOPS;
+    if (getenv(LJ_E2K_SCHED_DISABLE_GROUP))
+      as->sched.enable &= ~E2K_SCHED_GROUP;
     if (getenv(LJ_E2K_SCHED_DEBUG))
       as->sched.dbg = 1;
   }
