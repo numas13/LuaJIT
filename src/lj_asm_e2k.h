@@ -4,9 +4,9 @@
 */
 
 /* Environment variable names for e2k scheduler. */
-#define LJ_E2K_SCHED_DISABLE  "LJ_E2K_SCHED_DISABLE"
-#define LJ_E2K_SCHED_DISABLE_NOPS  "LJ_E2K_SCHED_DISABLE_NOPS"
-#define LJ_E2K_SCHED_DEBUG    "LJ_E2K_SCHED_DEBUG"
+#define LJ_E2K_SCHED_DISABLE        "LJ_E2K_SCHED_DISABLE"
+#define LJ_E2K_SCHED_DISABLE_NOPS   "LJ_E2K_SCHED_DISABLE_NOPS"
+#define LJ_E2K_SCHED_DEBUG          "LJ_E2K_SCHED_DEBUG"
 
 /* -- Register allocator extensions --------------------------------------- */
 
@@ -1709,13 +1709,15 @@ static void asm_setup_sched_latencies(ASMState *as, int iset)
 static void asm_setup_sched(ASMState *as)
 {
   memset(&as->sched, 0, sizeof(as->sched));
+
   /* Do not forget to preserve across sched_reset calls. */
-  if (!getenv(LJ_E2K_SCHED_DISABLE))
+  if (!getenv(LJ_E2K_SCHED_DISABLE)) {
     as->sched.enable = E2K_SCHED;
-  if (getenv(LJ_E2K_SCHED_DISABLE_NOPS))
-    as->sched.enable &= ~E2K_SCHED_NOPS;
-  if (getenv(LJ_E2K_SCHED_DEBUG))
-    as->sched.dbg = 1;
+    if (getenv(LJ_E2K_SCHED_DISABLE_NOPS))
+      as->sched.enable &= ~E2K_SCHED_NOPS;
+    if (getenv(LJ_E2K_SCHED_DEBUG))
+      as->sched.dbg = 1;
+  }
 
   asm_setup_sched_latencies(as, __iset__);
 }
