@@ -1319,10 +1319,14 @@ typedef enum E2kReadyCheckResult {
   READY_CHECK_RAW       = 1 << 2,
   READY_CHECK_WAR       = 1 << 3,
   READY_CHECK_WAW       = 1 << 4,
+  READY_CHECK_STORE     = 1 << 6,
+  READY_CHECK_LOAD      = 1 << 7,
   READY_CHECK_CONFLICT  = READY_CHECK_STOP
                         | READY_CHECK_RAW
                         | READY_CHECK_WAR
                         | READY_CHECK_WAW
+                        | READY_CHECK_STORE
+                        | READY_CHECK_LOAD
 } E2kReadyCheckResult;
 
 typedef struct E2kReadyCheck {
@@ -1332,6 +1336,8 @@ typedef struct E2kReadyCheck {
   uint32_t pred_r;
   uint8_t ctpr_w;
   uint8_t ctpr_r;
+  uint8_t load;
+  uint8_t store;
 } E2kReadyCheck;
 
 static E2kReadyCheckResult sched_ready_check_src(ASMState *as,
@@ -1431,24 +1437,6 @@ static E2kReadyCheckResult sched_ready_check_alop(ASMState *as,
 {
   E2kReadyCheckResult res = READY_CHECK_NONE;
 
-  switch (e2kop[insn->op].type) {
-  case TYPE_INT:
-  case TYPE_IMUL:
-  case TYPE_ICMP:
-  case TYPE_FADD:
-  case TYPE_FMUL:
-  case TYPE_FCMP:
-  case TYPE_FMISC:
-  case TYPE_FCVT:
-  case TYPE_VINT:
-  case TYPE_LOAD:
-    break;
-  default:
-    /* Do not group unknown instructions. */
-    res |= as->sched.ready_count ? READY_CHECK_STOP : READY_CHECK_LAST;
-    break;
-  }
-
   /* Check register usage. */
 
   if (insn->alop.flags & ALOP_SRC1_GPR)
@@ -1470,6 +1458,33 @@ static E2kReadyCheckResult sched_ready_check_alop(ASMState *as,
 
   if (insn->alop.cond)
     res |= sched_ready_check_src(as, ch, insn->alop.cond);
+
+  switch (e2kop[insn->op].type) {
+  case TYPE_INT:
+  case TYPE_IMUL:
+  case TYPE_ICMP:
+  case TYPE_FADD:
+  case TYPE_FMUL:
+  case TYPE_FCMP:
+  case TYPE_FMISC:
+  case TYPE_FCVT:
+  case TYPE_VINT:
+    break;
+  case TYPE_LOAD:
+    ch->load = 1;
+    if (ch->store)
+      res |= READY_CHECK_STORE;
+    break;
+  case TYPE_STORE:
+    ch->store = 1;
+    if (ch->load)
+      res |= READY_CHECK_LOAD;
+    break;
+  default:
+    /* Do not group unknown instructions. */
+    res |= as->sched.ready_count ? READY_CHECK_STOP : READY_CHECK_LAST;
+    break;
+  }
 
   /* Remember register usage. */
 
@@ -1556,6 +1571,10 @@ static int sched_ready_fill(ASMState *as)
           fprintf(stderr, " WAR");
         if (res & READY_CHECK_WAW)
           fprintf(stderr, " WAW");
+        if (res & READY_CHECK_LOAD)
+          fprintf(stderr, " LOAD");
+        if (res & READY_CHECK_STORE)
+          fprintf(stderr, " STORE");
       }
       fputc('\n', stderr);
     }
