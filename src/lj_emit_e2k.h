@@ -168,6 +168,61 @@ static void bundle_reset(E2kBundle *bundle)
   bundle->f1 = 1; /* HS itself */
 }
 
+static void bundle_set_src2(ASMState *as, int als_idx, uint8_t src2)
+{
+  lj_assertA((uint8_t) (as->bundle.als[als_idx] >> 8) == 0,
+             "expect zero in src2 field");
+  as->bundle.als[als_idx] |= (uint32_t) src2 << 8;
+}
+
+static int bundle_pack_lts(ASMState *as, uint32_t *lts)
+{
+  uint16_t *half = (uint16_t *) lts;
+  int lts_idx = 0;
+
+  /* Pack lts16. */
+  for (int i = 0; i < E2K_LTS16_NUM && as->bundle.lts16_mask[i]; i++) {
+    if (as->bundle.lts16_mask[i] & 0x3f) {
+      for (int j = 0; j < 6; j++) {
+        if (as->bundle.lts16_mask[i] & (1 << j)) {
+          bundle_set_src2(as, j, 0xd0 | (lts_idx / 2) | ((lts_idx & 1) << 2));
+        }
+      }
+    }
+    half[lts_idx++] = as->bundle.lts16[i];
+  }
+
+  if (lts_idx & 1) {
+    half[lts_idx++] = 0;
+  }
+  lts_idx /= 2;
+
+  /* Pack lts32. */
+  for (int i = 0; i < E2K_LTS32_NUM && as->bundle.lts32_mask[i]; i++) {
+    for (int j = 0; j < 6; j++) {
+      if (as->bundle.lts32_mask[i] & (1 << j)) {
+        bundle_set_src2(as, j, 0xd8 | lts_idx);
+      }
+    }
+    lts[lts_idx++] = as->bundle.lts32[i];
+  }
+
+  /* Pack lts64. */
+  for (int i = 0; i < E2K_LTS64_NUM && as->bundle.lts64_mask[i]; i++) {
+    for (int j = 0; j < 6; j++) {
+      if (as->bundle.lts64_mask[i] & (1 << j)) {
+        bundle_set_src2(as, j, 0xdc | lts_idx);
+      }
+    }
+
+    lts[lts_idx++] = as->bundle.lts64[i];
+    lts[lts_idx++] = as->bundle.lts64[i] >> 32;
+  }
+
+  as->bundle.f4 += lts_idx;
+  return lts_idx;
+}
+
 static MCode *bundle_pack(ASMState *as, MCode *mxp)
 {
   uint32_t hs_x_s_sw = (as->bundle.res & RES_SS) ? 0 : 0x2;
@@ -175,6 +230,8 @@ static MCode *bundle_pack(ASMState *as, MCode *mxp)
   uint32_t hs_cds = (as->bundle.hs_cds + 1) & -2;
   uint32_t hs_als = (~as->bundle.res & RES_ALS_ALL) >> RES_ALS_OFFSET;
   uint32_t hs_ales = as->bundle.hs_ales;
+  uint32_t lts[4];
+  int lts_count = bundle_pack_lts(as, lts);
 
   uint8_t f1 = as->bundle.f1;
   uint8_t f2 = as->bundle.f2;
@@ -226,12 +283,9 @@ static MCode *bundle_pack(ASMState *as, MCode *mxp)
   if (hs_cds > 0) *--mxp = (as->bundle.cds[0] << 16) | as->bundle.cds[1];
   if (hs_cds > 2) *--mxp = (as->bundle.cds[2] << 16) | as->bundle.cds[3];
   if (hs_cds > 4) *--mxp = (as->bundle.cds[4] << 16) | as->bundle.cds[5];
-  /* LTS[3-0], 32-bit, 16-bit half syls not implemented */
-  int used_lts = ((~as->bundle.res & RES_LTS_ALL)  >> RES_LTS_OFFSET);
-  for (int i = 0; i < 4; i++) {
-    if (used_lts & (1 << i)) {
-      *--mxp = as->bundle.lts[i];
-    }
+  /* LTS[3-0], 32-bit */
+  for (int i = 0; i < lts_count; i++) {
+    *--mxp = lts[i];
   }
 
   /* Write padding syllables to match required bundle size. */
@@ -289,40 +343,6 @@ static void bundle_finalize(ASMState *as, MCode **mxp)
 
 /* -- Bundle basic instructions ------------------------------------------- */
 
-static uint32_t bundle_lts(ASMState *as, uint64_t mask, E2kOpT type, uint64_t val)
-{
-  /* 16-bit halfsyls not managed yet, using lo part only */
-  uint64_t lts = 0;
-  int lts_idx = 0;
-  if (type == E2K_CONST16) {
-    mask &= RES_LTS1|RES_LTS0;
-  } else if (type == E2K_CONST32) {
-    mask &= RES_LTS3|RES_LTS2|RES_LTS1|RES_LTS0;
-  } else {
-    mask &= RES_LTS2|RES_LTS1|RES_LTS0;
-  }
-  lts = alloc_resource(as, &as->bundle, mask);
-  if (type == E2K_CONST64) /* check 2 syls for 64-bit literal */
-    alloc_resource(as, &as->bundle, lts << 1);
-  lts = lts >> RES_LTS_OFFSET;
-  while (lts >>= 1)
-    lts_idx++;
-
-  switch (type) {
-  case E2K_CONST16:
-    as->bundle.lts[lts_idx] = (uint16_t)(val); break;
-  case E2K_CONST32:
-    as->bundle.lts[lts_idx] = (uint32_t)(val); break;
-  case E2K_CONST64:
-    as->bundle.lts[lts_idx] = (uint32_t)(val);
-    as->bundle.lts[lts_idx+1] = (uint32_t)(val >> 32);
-    as->bundle.f4++;
-    break;
-  }
-  as->bundle.f4++;
-  return lts_idx;
-}
-
 static uint32_t bundle_src1(ASMState *as, E2kOpT type, intptr_t src1)
 {
   UNUSED(as);
@@ -361,23 +381,119 @@ static uint32_t bundle_src2(ASMState *as, E2kOpT type, intptr_t src2)
       return (src2 - RID_G16 + 16) | 0xe0;
     default:
       lj_assertA(0, "bad reg for src2 (%d)", src2);
-      return 0;
+      abort();
     }
   } else {
     switch (get_const_type(src2)) {
     case E2K_CONST4:
       return src2 | 0xc0;
-    case E2K_CONST5: case E2K_CONST16:
-      return (bundle_lts(as, RES_LTS_ALL, E2K_CONST16, src2) | 0xd0);
-    case E2K_CONST32:
-      return (bundle_lts(as, RES_LTS_ALL, E2K_CONST32, src2) | 0xd8);
-    case E2K_CONST64:
-      return (bundle_lts(as, RES_LTS_ALL, E2K_CONST64, src2) | 0xdc);
     default:
       lj_assertA(0, "bad type for src2 (%d)", type);
-      return 0;
+      abort();
     }
   }
+}
+
+static int bundle_src2_lit(ASMState *as, MCode **p, uint64_t val, int als_idx)
+{
+  int i;
+
+  switch (get_const_type(val)) {
+  case E2K_CONST4:
+    bundle_set_src2(as, als_idx, val | 0xc0);
+    goto done;
+
+  case E2K_CONST5:
+  case E2K_CONST16:
+    val = (int16_t) val;
+
+    /* Try to reuse existing lts16. */
+    for (i = 0; i < E2K_LTS16_NUM && as->bundle.lts16_mask[i]; i++) {
+      if (as->bundle.lts16[i] == val) {
+        as->bundle.lts16_mask[i] |= 1 << als_idx;
+        goto done;
+      }
+    }
+
+    /* Allocate lts16. */
+    if (i < E2K_LTS16_NUM) {
+      as->bundle.lts_size += E2K_LTS16_SIZE;
+      lj_assertA(as->bundle.lts_size <= E2K_LTS_SIZE_MAX, "lts overflow");
+      as->bundle.lts16_mask[i] |= 1 << als_idx;
+      as->bundle.lts16[i] = val;
+      goto done;
+    }
+
+    /* TODO: lts: reuse lts32/lts64 part */
+
+    /* Promote lts16 to lts32. */
+    /* fallthrough */
+
+  case E2K_CONST32:
+    /* Try to reuse existing lts32. */
+    for (i = 0; i < E2K_LTS32_NUM && as->bundle.lts32_mask[i]; i++) {
+      if (as->bundle.lts32[i] == val) {
+        as->bundle.lts32_mask[i] |= 1 << als_idx;
+        goto done;
+      }
+    }
+
+    /* Allocate lts32. */
+    if (i < E2K_LTS32_NUM) {
+      as->bundle.lts_size += E2K_LTS32_SIZE;
+      lj_assertA(as->bundle.lts_size <= E2K_LTS_SIZE_MAX, "lts overflow");
+      as->bundle.lts32_mask[i] |= 1 << als_idx;
+      as->bundle.lts32[i] = val;
+      goto done;
+    }
+
+    /* TODO: lts: reuse lts64 part */
+
+    /* Promote lts32 to lts64. */
+    /* fallthrough */
+
+  case E2K_CONST64:
+    /* Try to reuse existing lts64. */
+    for (i = 0; i < E2K_LTS64_NUM && as->bundle.lts64_mask[i]; i++) {
+      if (as->bundle.lts64[i] == val) {
+        as->bundle.lts64_mask[i] |= 1 << als_idx;
+        goto done;
+      }
+    }
+
+    /* Allocate lts64. */
+    if (i < E2K_LTS64_NUM) {
+      as->bundle.lts_size += E2K_LTS64_SIZE;
+      lj_assertA(as->bundle.lts_size <= E2K_LTS_SIZE_MAX, "lts overflow");
+      as->bundle.lts64_mask[i] |= 1 << als_idx;
+      as->bundle.lts64[i] = val;
+      goto done;
+    }
+
+    lj_assertA(0, "lts overflow");
+    break;
+
+  default:
+    lj_assertA(0, "unexpected const type");
+    break;
+  }
+
+  abort();
+
+done:
+  bundle_finalize(as, p);
+  return als_idx;
+}
+
+static void bundle_setr_lts0(ASMState *as, uint32_t val)
+{
+  lj_assertA(!as->bundle.lts16_mask[0] && !as->bundle.lts16_mask[1],
+             "expect free lts16[0..1]");
+  as->bundle.lts_size += E2K_LTS32_SIZE;
+  as->bundle.lts16_mask[0] |= E2K_LTS16_SETR;
+  as->bundle.lts16_mask[1] |= E2K_LTS16_SETR;
+  as->bundle.lts16[0] = val;
+  as->bundle.lts16[1] = val >> 16;
 }
 
 static uint32_t bundle_src3(ASMState *as, E2kOpT type, intptr_t src3)
@@ -393,9 +509,11 @@ static uint32_t bundle_src3(ASMState *as, E2kOpT type, intptr_t src3)
       return (src3 - RID_G16 + 16) | 0xe0;
     default:
       lj_assertA(0, "bad reg for src3 (%d)", src3);
+      abort();
     }
   } else {
     lj_assertA(0, "bad type for src3 (%d)", type);
+    abort();
   }
 }
 
@@ -414,9 +532,11 @@ static uint32_t bundle_dst(ASMState *as, E2kOpT type, intptr_t dst)
       return (dst - RID_G16 + 16) | 0xe0;
     default:
       lj_assertA(0, "bad reg for dst (%d)", dst);
+      abort();
     }
   } else {
     lj_assertA(0, "bad type for dst (%d)", type);
+    abort();
   }
 }
 
@@ -427,7 +547,7 @@ static uint32_t bundle_pdst(ASMState *as, E2kOpT type, intptr_t pred)
     return pred - RID_PRED0;
   } else {
     lj_assertA(0, "bad reg for pdst (%d)", pred);
-    return 0;
+    abort();
   }
 }
 
@@ -496,7 +616,7 @@ static void bundle_cds(ASMState *as, int opc, int als, Reg pred, int inverted,
   bundle_cds(as, 2, als, pred, inv, p)
 #define ISRC1(src1) bundle_src1(as, E2K_CONST, src1)
 #define RSRC1(src1) bundle_src1(as, E2K_REG, src1)
-#define ISRC2(src2) bundle_src2(as, E2K_CONST, src2)
+#define ISRC2(as, p, src2, als_idx) bundle_src2_lit(as, p, src2, als_idx)
 #define RSRC2(src2) bundle_src2(as, E2K_REG, src2)
 #define RSRC3(src3) bundle_src3(as, E2K_REG, src3)
 #define RSRC4(src4) bundle_src3(as, E2K_REG, src4)
@@ -505,15 +625,15 @@ static void bundle_cds(ASMState *as, int opc, int als, Reg pred, int inverted,
 #define bundle_alopf7_rr(as, spec, op, src1, src2, pred, p) \
   bundle_alop(as, p, spec, op, RSRC1(src1), RSRC2(src2), 0, PDST(pred))
 #define bundle_alopf7_ri(as, spec, op, src1, src2, pred, p) \
-  bundle_alop(as, p, spec, op, RSRC1(src1), ISRC2(src2), 0, PDST(pred))
+  ISRC2(as, p, src2, bundle_alop(as, 0, spec, op, RSRC1(src1), 0, 0, PDST(pred)))
 #define bundle_alopf3_ri(as, spec, op, src1, src2, src3, p) \
-  bundle_alop(as, p, spec, op, RSRC1(src1), ISRC2(src2), 0, RSRC3(src3))
+  ISRC2(as, p, src2, bundle_alop(as, 0, spec, op, RSRC1(src1), 0, 0, RSRC3(src3)))
 #define bundle_alopf12_i(as, spec, op, src2, dst, p) \
-  bundle_alop(as, p, spec, op, 0, ISRC2(src2), 0, RDST(dst))
+  ISRC2(as, p, src2, bundle_alop(as, 0, spec, op, 0, 0, 0, RDST(dst)))
 #define bundle_alopf12_r(as, spec, op, src2, dst, p) \
   bundle_alop(as, p, spec, op, 0, RSRC2(src2), 0, RDST(dst))
 #define bundle_alopf2_i(as, spec, op, src2, dst, p) \
-  bundle_alop(as, p, spec, op, 0, ISRC2(src2), 0, RDST(dst))
+  ISRC2(as, p, src2, bundle_alop(as, 0, spec, op, 0, 0, 0, RDST(dst)))
 #define bundle_alopf2_r(as, spec, op, src2, dst, p) \
   bundle_alop(as, p, spec, op, 0, RSRC2(src2), 0, RDST(dst))
 #define bundle_alopf21_rrr(as, spec, op, src1, src2, src3, dst, p) \
@@ -523,17 +643,17 @@ static void bundle_cds(ASMState *as, int opc, int als, Reg pred, int inverted,
 #define bundle_alopf11_ir(as, spec, op, src1, src2, dst, p) \
   bundle_alop(as, p, spec, op, ISRC1(src1), RSRC2(src2), 0, RDST(dst))
 #define bundle_alopf11_ri(as, spec, op, src1, src2, dst, p) \
-  bundle_alop(as, p, spec, op, RSRC1(src1), ISRC2(src2), 0, RDST(dst))
+  ISRC2(as, p, src2, bundle_alop(as, 0, spec, op, RSRC1(src1), 0, 0, RDST(dst)))
 #define bundle_alopf11_ii(as, spec, op, src1, src2, dst, p) \
-  bundle_alop(as, p, spec, op, ISRC1(src1), ISRC2(src2), 0, RDST(dst))
+  ISRC2(as, p, src2, bundle_alop(as, 0, spec, op, ISRC1(src1), 0, 0, RDST(dst)))
 #define bundle_alopf1_rr(as, spec, op, src1, src2, dst, p) \
   bundle_alop(as, p, spec, op, RSRC1(src1), RSRC2(src2), 0, RDST(dst))
 #define bundle_alopf1_ir(as, spec, op, src1, src2, dst, p) \
   bundle_alop(as, p, spec, op, ISRC1(src1), RSRC2(src2), 0, RDST(dst))
 #define bundle_alopf1_ri(as, spec, op, src1, src2, dst, p) \
-  bundle_alop(as, p, spec, op, RSRC1(src1), ISRC2(src2), 0, RDST(dst))
+  ISRC2(as, p, src2, bundle_alop(as, 0, spec, op, RSRC1(src1), 0, 0, RDST(dst)))
 #define bundle_alopf1_ii(as, spec, op, src1, src2, dst, p) \
-  bundle_alop(as, p, spec, op, ISRC1(src1), ISRC2(src2), 0, RDST(dst))
+  ISRC2(as, p, src2, bundle_alop(as, 0, spec, op, ISRC1(src1), 0, 0, RDST(dst)))
 #define bundle_snapno(as, snapno, p) \
   bundle_alopf1_ii(as, 0, E2K_ADDD, (snapno) < 32 ? (snapno) : 31, \
       (snapno) < 32 ? 0 : (snapno) - 31, RID_TMP, p);
@@ -654,7 +774,7 @@ static void bundle_setr(ASMState *as, MCode **p,
         lts0.fields.wsz = wsz;
         lts0.fields.nfx = nfx;
         lts0.fields.dbl = dbl;
-        bundle_lts(as, RES_LTS0, E2K_CONST32, lts0.i);
+        bundle_setr_lts0(as, lts0.i);
     }
 
     bundle_finalize(as, p);
@@ -1117,7 +1237,7 @@ static int sched_bundle_insn(ASMState *as, const E2kInsn *insn,
     if (insn->alop.flags & ALOP_SRC2_GPR)
       src2 = RSRC2(insn->alop.src2);
     else if (insn->alop.flags & ALOP_SRC2_LIT)
-      src2 = ISRC2(insn->alop.literal);
+      src2 = 0;
     else
       src2 = insn->alop.src2;
 
@@ -1146,6 +1266,9 @@ static int sched_bundle_insn(ASMState *as, const E2kInsn *insn,
     else
       als_idx = bundle_alop(as, 0, (insn->alop.flags & ALOP_SPEC) != 0,
                             insn->op, src1, src2, src3, dst);
+
+    if (insn->alop.flags & ALOP_SRC2_LIT)
+      bundle_src2_lit(as, 0, insn->alop.literal, als_idx);
 
     if (insn->alop.cond) {
       bundle_rlp(as, als_idx, insn->alop.cond,
@@ -1467,10 +1590,12 @@ static void emit_control(ASMState *as, uint8_t src1, uint8_t src2)
 {
   lj_assertA(src1 < 32, "invalid src1");
   lj_assertA(src2 < 16, "invalid src2");
+  src1 |= 0xc0;
+  src2 |= 0xc0;
   if (as->sched.enable)
-    emit_alop(as, 0, 0, E2K_ORD, ISRC1(src1), ISRC2(src2), 0, 0xdf);
+    emit_alop(as, 0, 0, E2K_ORD, src1, src2, 0, 0xdf);
   else
-    bundle_alop(as, &as->mcp, 0, E2K_ORD, ISRC1(src1), ISRC2(src2), 0, 0xdf);
+    bundle_alop(as, &as->mcp, 0, E2K_ORD, src1, src2, 0, 0xdf);
 }
 
 static void emit_disp(ASMState *as, Reg ctpr, MCode *target)

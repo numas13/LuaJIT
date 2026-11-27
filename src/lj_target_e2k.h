@@ -162,8 +162,7 @@ static LJ_AINLINE uint32_t *exitstub_trace_addr_(uint32_t *p, uint32_t exitno)
 #define RES_ALS_OFFSET  (RES_SS_OFFSET + 1)
 #define RES_CS_OFFSET   (RES_ALS_OFFSET + 6)
 #define RES_AAS_OFFSET  (RES_CS_OFFSET + 2)
-#define RES_LTS_OFFSET  (RES_AAS_OFFSET + 6)
-#define RES_PLS_OFFSET  (RES_LTS_OFFSET + 4)
+#define RES_PLS_OFFSET  (RES_AAS_OFFSET + 6)
 #define RES_CDS_OFFSET  (RES_PLS_OFFSET + 3)
 #define RES_MASK_SIZE   (RES_CDS_OFFSET + 6)
 
@@ -189,10 +188,6 @@ typedef enum E2kResourceMask {
   RES_AAS3        = RES_BIT(RES_AAS_OFFSET + 3),
   RES_AAS4        = RES_BIT(RES_AAS_OFFSET + 4),
   RES_AAS5        = RES_BIT(RES_AAS_OFFSET + 5),
-  RES_LTS0        = RES_BIT(RES_LTS_OFFSET + 0),
-  RES_LTS1        = RES_BIT(RES_LTS_OFFSET + 1),
-  RES_LTS2        = RES_BIT(RES_LTS_OFFSET + 2),
-  RES_LTS3        = RES_BIT(RES_LTS_OFFSET + 3),
   RES_PLS0        = RES_BIT(RES_PLS_OFFSET + 0),
   RES_PLS1        = RES_BIT(RES_PLS_OFFSET + 1),
   RES_PLS2        = RES_BIT(RES_PLS_OFFSET + 2),
@@ -212,12 +207,20 @@ typedef enum E2kResourceMask {
   RES_ALS_C0      = RES_ALS0 | RES_ALS1 | RES_ALS2,
   RES_ALS_C1      = RES_ALS3 | RES_ALS4 | RES_ALS5,
   RES_CS_ALL      = RES_CS0 | RES_CS1,
-  RES_LTS_ALL     = RES_LTS0 | RES_LTS1 | RES_LTS2 | RES_LTS3,
   RES_CDS0        = RES_CDS00 | RES_CDS01,
   RES_CDS1        = RES_CDS10 | RES_CDS11,
   RES_CDS2        = RES_CDS20 | RES_CDS21,
   RES_CDS_ALL     = RES_CDS0 | RES_CDS1 | RES_CDS2,
 } E2kResourceMask;
+
+#define E2K_LTS16_SETR 0x80
+#define E2K_LTS16_SIZE 1
+#define E2K_LTS32_SIZE 2
+#define E2K_LTS64_SIZE 4
+#define E2K_LTS16_NUM 4
+#define E2K_LTS32_NUM 4
+#define E2K_LTS64_NUM 2
+#define E2K_LTS_SIZE_MAX 8
 
 typedef struct {
   uint8_t lng;
@@ -228,12 +231,18 @@ typedef struct {
   uint8_t hs_cds;
   uint8_t hs_ales;
   uint8_t nop;
+  uint8_t lts_size;
+  uint8_t lts16_mask[E2K_LTS16_NUM];
+  uint8_t lts32_mask[E2K_LTS32_NUM];
+  uint8_t lts64_mask[E2K_LTS64_NUM];
   E2kResourceMask res;
   uint32_t ss;
   uint32_t als[6];
   uint32_t cs[2];
   uint16_t ales[6];
-  uint32_t lts[4];
+  uint16_t lts16[E2K_LTS16_NUM];
+  uint32_t lts32[E2K_LTS32_NUM];
+  uint64_t lts64[E2K_LTS64_NUM];
   uint16_t cds[6];
   void *cs0_target;
 } E2kBundle;
