@@ -695,6 +695,10 @@ static void sched_dbg_impl(ASMState *as, const char *file, int line,
 
 #define ALC_CLUSTER(alc_idx) ((alc_idx) > 2)
 
+#define HINT_CLUSTER_ANY  0
+#define HINT_CLUSTER_0    1
+#define HINT_CLUSTER_1    2
+
 static void sched_latency_set(E2kOut from, E2kIn to, uint8_t value)
 {
   e2klat[from][to] = value;
@@ -951,12 +955,13 @@ static E2kCycle sched_max_cycle(E2kCycle t0, E2kCycle t1)
 }
 
 static int sched_cycles_to_ready_gpr(ASMState *as, E2kInsn *insn, int rid,
-                                     int cluster)
+                                     uint8_t *hint)
 {
   static const E2kIn map[3] = { IN_I, IN_F, IN_S };
   const E2kReservation *res;
   E2kUseGpr *use;
-  E2kCycle max = 0;
+  E2kCycle max[2] = { 0 };
+  int delta[2];
   lj_assertA(RID_IS_GPR(rid), "expect gpr");
   use = &as->sched.use_gpr[rid - RID_MIN_GPR];
   if (use->used) {
@@ -964,14 +969,31 @@ static int sched_cycles_to_ready_gpr(ASMState *as, E2kInsn *insn, int rid,
     for (int i = 0; i < USE_GPR_LEN; i++) {
       if (use->src[i]) {
         E2kIn in = map[i / 2];
-        if ((i & 1) != cluster)
-          in = in == IN_S ? IN_S_C : IN_R;
-        max = sched_max_cycle(max, use->src[i] + sched_latency(res, in));
+        int cl = i & 1;
+        /* Same cluster. */
+        max[cl] = sched_max_cycle(max[cl], use->src[i] + sched_latency(res, in));
+        cl ^= 1;
+        in = in == IN_S ? IN_S_C : IN_R;
+        /* Different cluster. */
+        max[cl] = sched_max_cycle(max[cl], use->src[i] + sched_latency(res, in));
       }
     }
   }
-  /* TODO: sched: cluster hint (any, cluster0, cluster1) */
-  return max - as->sched.cycle;
+
+  delta[0] = max[0] - as->sched.cycle;
+  delta[1] = max[1] - as->sched.cycle;
+  if (hint) {
+    if (delta[0] <= 0 && delta[1] <= 0) {
+      *hint = HINT_CLUSTER_ANY;
+    } else if (delta[0] < delta[1]) {
+      *hint = HINT_CLUSTER_0;
+      return delta[0];
+    } else {
+      *hint = HINT_CLUSTER_1;
+      return delta[1];
+    }
+  }
+  return delta[0] > delta[1] ? delta[0] : delta[1];
 }
 
 static int sched_cycles_to_ready_pred(ASMState *as, E2kInsn *insn, int rid)
@@ -1005,7 +1027,7 @@ static int sched_cycles_to_ready_ctpr(ASMState *as, E2kInsn *insn, int rid)
 
 /* Returns the number of cycles relative to the current cycle when
  * an instruction can be issued without lock contention. */
-static int sched_cycles_to_ready(ASMState *as, E2kInsn *insn, int cluster)
+static int sched_cycles_to_ready(ASMState *as, E2kInsn *insn, uint8_t *hint)
 {
   switch (insn->op) {
   case E2K_INSN_DISP:
@@ -1018,7 +1040,7 @@ static int sched_cycles_to_ready(ASMState *as, E2kInsn *insn, int cluster)
     lj_assertA(insn->op < E2K_ALOP_END, "expect alop");
     if (insn->alop.flags & ALOP_DST_REG) {
       if (RID_IS_GPR(insn->alop.dst))
-        return sched_cycles_to_ready_gpr(as, insn, insn->alop.dst, cluster);
+        return sched_cycles_to_ready_gpr(as, insn, insn->alop.dst, hint);
       else if (RID_IS_PRED(insn->alop.dst))
         return sched_cycles_to_ready_pred(as, insn, insn->alop.dst);
       else if (RID_IS_CTPR(insn->alop.dst))
@@ -1145,16 +1167,25 @@ static int sched_emit_single_insn(ASMState *as)
 {
   int als_idx, nops;
   E2kInsn *insn = as->sched.tail;
+  E2kResourceMask mask;
+  uint8_t hint = HINT_CLUSTER_ANY;
 
-  als_idx = sched_bundle_insn(as, insn, RES_NONE);
   if (as->sched.enable & E2K_SCHED_NOPS) {
-    nops = sched_cycles_to_ready(as, insn, ALC_CLUSTER(als_idx));
+    nops = sched_cycles_to_ready(as, insn, &hint);
     if (nops < 0)
       nops = 0;
     else
       as->sched.cycle += nops;
     bundle_nop(as, nops);
   }
+
+  if (hint != HINT_CLUSTER_ANY) {
+    mask = e2kres[e2kop[insn->op].type].mask;
+    mask &= hint == HINT_CLUSTER_0 ? RES_ALS_C0 : RES_ALS_C1;
+  } else {
+    mask = RES_NONE;
+  }
+  als_idx = sched_bundle_insn(as, insn, mask);
   bundle_finalize(as, &as->mcp);
 
 #ifdef LUA_USE_ASSERT
