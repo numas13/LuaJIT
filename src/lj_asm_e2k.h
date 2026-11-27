@@ -2034,7 +2034,6 @@ static const E2kOp e2kop[] = {
   { "PSHUFB",     TYPE_VINT,        0x0f00, 0x4d000000 },
 /* --------------------------------------------------- */
   { "DISP",       TYPE_PREP,        0x0000, 0x00000000 },
-  { "PREPCALL",   TYPE_PREP,        0x0000, 0x00000000 },
   { "CT",         TYPE_CT,          0x0000, 0x00000000 },
   { "IBRANCH",    TYPE_CT,          0x0000, 0x00000000 },
   { "CALL",       TYPE_CT,          0x0000, 0x00000000 },

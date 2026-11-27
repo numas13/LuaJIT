@@ -550,7 +550,6 @@ enum {
   /* ------------------------------------------------- */
   E2K_ALOP_END,
   E2K_INSN_DISP = E2K_ALOP_END,
-  E2K_INSN_PREPCALL,
   E2K_INSN_CT,
   E2K_INSN_IBRANCH,
   E2K_INSN_CALL

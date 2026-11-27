@@ -599,9 +599,11 @@ static void bundle_prepcall(ASMState *as, Reg ctpr,
                             ASMFunction target, MCode **p)
 {
   ptrdiff_t delta = (MCode *) target - as->mcp;
-  if (E2KF_S_OK(delta + 64, 29)) {
+  /* Check if target address can be encoded to disp. */
+  if (E2KF_S_OK(delta + 8, 29) && E2KF_S_OK(delta + 64, 29)) {
     bundle_disp(as, ctpr, (MCode *) target, p);
-  } else { /* Target out of range; need indirect call. */
+  } else {
+    /* Target out of range; need absolute address. */
     bundle_alopf2_i(as, 0, E2K_MOVTD, (intptr_t)target, ctpr, p);
   }
 }
@@ -781,8 +783,7 @@ static void sched_dump_insn(ASMState *as, E2kInsn *insn)
 
   switch (insn->op) {
   case E2K_INSN_DISP:
-  case E2K_INSN_PREPCALL:
-    fprintf(stderr, "%s %p", sched_reg_name(insn->disp.ctpr),
+    fprintf(stderr, "%s, %p", sched_reg_name(insn->disp.ctpr),
             insn->disp.target);
     break;
   case E2K_INSN_CT:
@@ -903,7 +904,6 @@ static void sched_use(ASMState *as, E2kInsn *insn, int cluster)
 {
   switch (insn->op) {
   case E2K_INSN_DISP:
-  case E2K_INSN_PREPCALL:
     break;
   case E2K_INSN_CT:
     sched_use_ctpr(as, insn, insn->ct.ctpr, IN_CT);
@@ -1001,7 +1001,6 @@ static int sched_cycles_to_ready(ASMState *as, E2kInsn *insn, int cluster)
 {
   switch (insn->op) {
   case E2K_INSN_DISP:
-  case E2K_INSN_PREPCALL:
     return sched_cycles_to_ready_ctpr(as, insn, insn->disp.ctpr);
   case E2K_INSN_CT:
   case E2K_INSN_IBRANCH:
@@ -1042,7 +1041,6 @@ static void sched_issued(ASMState *as, E2kInsn *insn)
 {
   switch (insn->op) {
   case E2K_INSN_DISP:
-  case E2K_INSN_PREPCALL:
     sched_use_reset(as, insn->disp.ctpr);
     break;
   case E2K_INSN_CT:
@@ -1065,9 +1063,6 @@ static int sched_bundle_insn(ASMState *as, const E2kInsn *insn)
   switch (insn->op) {
   case E2K_INSN_DISP:
     bundle_disp(as, insn->disp.ctpr, insn->disp.target, 0);
-    break;
-  case E2K_INSN_PREPCALL:
-    bundle_prepcall(as, insn->disp.ctpr, insn->disp.target, 0);
     break;
   case E2K_INSN_CT:
     bundle_ct(as, insn->ct.ctpr, insn->ct.pred, insn->ct.inverted, 0);
@@ -1448,9 +1443,14 @@ static void emit_disp(ASMState *as, Reg ctpr, MCode *target)
 static void emit_prepcall(ASMState *as, Reg ctpr, ASMFunction target)
 {
   if (as->sched.enable) {
-    E2kInsn *insn = sched_alloc(as, E2K_INSN_PREPCALL);
-    insn->disp.ctpr = ctpr;
-    insn->disp.target = target;
+    ptrdiff_t delta = (MCode *) target - as->mcp;
+    /* Check if target address can be encoded to disp. */
+    if (E2KF_S_OK(delta + 8, 29) && E2KF_S_OK(delta + 8192, 29)) {
+      emit_disp(as, ctpr, (MCode *) target);
+    } else {
+      /* Target out of range; need absolute address. */
+      emit_alopf2_i(as, 0, E2K_MOVTD, (intptr_t)target, ctpr);
+    }
   } else
     bundle_prepcall(as, ctpr, target, &as->mcp);
 }
